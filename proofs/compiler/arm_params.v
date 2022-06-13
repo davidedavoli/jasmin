@@ -88,9 +88,8 @@ Definition arm_cmd_large_subi (x y : var_i) (imm : Z) : seq fopn_args :=
 (* Stack alloc parameters. *)
 
 Definition arm_mov_ofs
-  (x : lval) (tag : assgn_tag) (vpk : vptr_kind) (y : pexpr) (ofs : Z) :
+  (x : lval) (tag : assgn_tag) (vpk : vptr_kind) (y : pexpr) (ofs : pexpr) :
   option instr_r :=
-  let ofs := eword_of_int reg_size ofs in
   let: (op, args) :=
     match mk_mov vpk with
     | MK_LEA => (ADR, [:: add y ofs ])

@@ -40,7 +40,7 @@ Definition x86_op_align (x : var_i) (ws : wsize) (al : wsize) : fopn_args :=
 (* Stack alloc parameters. *)
 
 Definition lea_ptr x y tag ofs : instr_r :=
-  Copn [:: x] tag (Ox86 (LEA Uptr)) [:: add y (cast_const ofs)].
+  Copn [:: x] tag (Ox86 (LEA Uptr)) [:: add y ofs].
 
 Definition x86_mov_ofs x tag vpk y ofs :=
   let addr :=
@@ -48,7 +48,7 @@ Definition x86_mov_ofs x tag vpk y ofs :=
     then
       lea_ptr x y tag ofs
     else
-      if ofs == 0%Z
+      if ofs is Pconst 0
       then mov_ws Uptr x y tag
       else lea_ptr x y tag ofs
   in

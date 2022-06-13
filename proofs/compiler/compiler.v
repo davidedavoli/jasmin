@@ -177,7 +177,8 @@ Record compiler_params
   fresh_id         : glob_decls -> var -> Ident.ident;
   fresh_var_ident  : v_kind -> instr_info -> Ident.name -> stype -> Ident.ident;
   is_reg_array     : var -> bool;
-  slh_info         : _uprog → funname → seq slh_t * seq slh_t
+  slh_info         : _uprog → funname → seq slh_t * seq slh_t;
+  print_rmap       : instr_info -> table * Region.region_map -> table * Region.region_map;
 }.
 
 Context
@@ -329,6 +330,7 @@ Definition compiler_front_end (entries: seq funname) (p: prog) : cexec sprog :=
       (ao_globals ao)
       (ao_global_alloc ao)
       (ao_stack_alloc ao)
+      (print_rmap cparams)
       pl
   in
   let ps : sprog := cparams.(print_sprog) StackAllocation ps in
