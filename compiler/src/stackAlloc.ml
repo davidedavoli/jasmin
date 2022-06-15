@@ -92,7 +92,7 @@ module StackAlloc (Arch: Arch_full.Arch) = struct
 
 module Regalloc = Regalloc (Arch)
 
-let memory_analysis pp_err ~debug print_rmap up =
+let memory_analysis string_of_sr pp_err ~debug print_rmap up =
   if debug then Format.eprintf "START memory analysis@.";
   let p = Conv.prog_of_cuprog up in
   let gao, sao = Varalloc.alloc_stack_prog Arch.callstyle Arch.reg_size Arch.aparams.ap_is_move_op p in
@@ -175,6 +175,7 @@ let memory_analysis pp_err ~debug print_rmap up =
         false
         Arch.aparams.ap_shp
         Arch.aparams.ap_sap
+        string_of_sr
         (Conv.fresh_var_ident (Reg (Normal, Pointer Writable)) IInfo.dummy)
         crip
         crsp

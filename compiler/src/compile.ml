@@ -70,7 +70,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
 
   let translate_var = Conv.var_of_cvar in
 
-  let print_trmap ii (trmap : Stack_alloc.table * Stack_alloc.Region.region_map) =
+    let open Stack_alloc in
       let pp_pos fmt p =
         Z.pp_print fmt (Conv.z_of_pos p)
       in
@@ -93,29 +93,14 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
         match e with
         | APconst i -> Z.pp_print fmt (Conv.z_of_cz i)
         | APbool b -> Format.fprintf fmt "%b" b
-        | AParr_init _ -> assert false
         | APvar v -> pp_pos fmt v
         | APget (aa, ws, x, e) -> pp_arr_access pp_pos pp_apexpr pp_pos fmt aa ws x e None
         | APsub (aa, ws, len, x, e) -> pp_arr_access pp_pos pp_apexpr pp_pos fmt aa ws x e (Some len)
-        | APapp1 (o, e) -> Format.fprintf fmt "@[<h>(%s@ %a)@]" (PrintCommon.string_of_op1 o) pp_apexpr e
-        | APapp2 _ -> assert false
+        | APapp1 (op, e) -> Format.fprintf fmt "@[<h>(%s@ %a)@]" (PrintCommon.string_of_op1 op) pp_apexpr e
+        | APapp2 (op, e1, e2)-> Format.fprintf fmt "@[(%a %s@ %a)@]" pp_apexpr e1 (PrintCommon.string_of_op2 op) pp_apexpr e2
         | APappN _ -> assert false
         | APif _ -> assert false
       in
-      let pp_tab fmt tab =
-        let open Stack_alloc in
-        let pp_bindings fmt bindings =
-          Format.fprintf fmt "@[<v>";
-          Var0.Mvar.fold (fun x ap () ->
-            Format.printf "@[<h>%a -> %a@]@,"
-              (Printer.pp_var ~debug:true) (Conv.var_of_cvar (Obj.magic x))
-              pp_apexpr ap) bindings ();
-          Format.fprintf fmt "@]"
-        in
-        Format.fprintf fmt "@[<v>{ bindings:@;<2 4>%a@;<2 2>counter: %a@,}@]@." pp_bindings tab.bindings pp_pos tab.counter
-      in
-      let pp_rmap fmt rmap =
-        let open Stack_alloc in
         let pp_region fmt r =
           Format.fprintf fmt "{ slot = %a; wsize = %s; align = %b }"
             (Printer.pp_var ~debug:true) (Conv.var_of_cvar r.r_slot)
@@ -136,10 +121,24 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
         let pp_sub_region fmt sr =
           Format.fprintf fmt "{ region = %a; zone = @[<h>%a@] }" pp_region sr.sr_region pp_abstract_zone sr.sr_zone
         in
+        let print_trmap ii (trmap : Stack_alloc.table * Stack_alloc.Region.region_map) =
+      let pp_tab fmt tab =
+        let open Stack_alloc in
+        let pp_bindings fmt bindings =
+          Format.fprintf fmt "@[<v>";
+          Var0.Mvar.fold (fun x ap () ->
+            Format.fprintf fmt "@[<h>%a -> %a@]@,"
+              (Printer.pp_var ~debug:true) (Conv.var_of_cvar (Obj.magic x))
+              pp_apexpr ap) bindings ();
+          Format.fprintf fmt "@]"
+        in
+        Format.fprintf fmt "@[<v>{ bindings:@;<2 4>%a@;<2 2>counter: %a@,}@]@." pp_bindings tab.bindings pp_pos tab.counter
+      in
+      let pp_rmap fmt rmap =
         let pp_region_var fmt vr =
           Format.fprintf fmt "@[<v>";
           Var0.Mvar.fold (fun x sr () ->
-            Format.printf "@[<h>%a -> %a@]@,"
+            Format.fprintf fmt "@[<h>%a -> %a@]@,"
               (Printer.pp_var ~debug:true) (Conv.var_of_cvar (Obj.magic x))
               pp_sub_region sr) vr ();
           Format.fprintf fmt "@]"
@@ -166,7 +165,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
                 | Unknown -> Format.fprintf fmt "Unknown"
                 | Borrowed z -> Format.fprintf fmt "Borrowed: @[<h>%a@]" pp_abstract_zone z
               in
-              Format.printf "%a -> %a -> %a@,"
+              Format.fprintf fmt "%a -> %a -> %a@,"
                 (Printer.pp_var ~debug:true) (Conv.var_of_cvar (Obj.magic r).r_slot)
                 (Printer.pp_var ~debug:true) (Conv.var_of_cvar (Obj.magic x))
                 (* (Byteset.ByteSet.pp_bytes pp_int) b *)
@@ -177,11 +176,12 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
         in
         Format.fprintf fmt "@[<v>{ var_region:@;<2 4>%a@;<2 2>region_var:@;<2 4>%a@,}@]@." pp_region_var rmap.Region.var_region pp_var_region rmap.Region.region_var
       in
-      Format.printf "@[<v>%a@,%a@,%a@]@." Location.pp_iloc (fst ii) pp_tab (fst trmap) pp_rmap (snd trmap)
+      Format.eprintf "@[<v>%a@,%a@,%a@]@." Location.pp_iloc (fst ii) pp_tab (fst trmap) pp_rmap (snd trmap)
     in
 
   let memory_analysis up : Compiler.stack_alloc_oracles =
     StackAlloc.memory_analysis
+      (fun sr -> Conv.cstring_of_string (Format.asprintf "%a" pp_sub_region sr))
       (Printer.pp_err ~debug:!debug)
       ~debug:!debug
       (fun ii trmap -> print_trmap ii trmap; trmap)
@@ -326,6 +326,8 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
 
   let cparams =
     {
+      Compiler.string_of_sr =
+        (fun sr -> Conv.cstring_of_string (Format.asprintf "%a" pp_sub_region sr));
       Compiler.rename_fd;
       Compiler.expand_fd;
       Compiler.split_live_ranges_fd =

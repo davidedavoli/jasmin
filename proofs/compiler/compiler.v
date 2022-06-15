@@ -158,6 +158,7 @@ Record compiler_params
   {asm_op : Type}
   {asmop : asmOp asm_op}
   (lowering_options : Type) := {
+  string_of_sr     : stack_alloc.sub_region -> string;
   rename_fd        : instr_info -> funname -> _ufundef -> _ufundef;
   expand_fd        : funname -> _ufundef -> expand_info;
   split_live_ranges_fd : funname -> _ufundef -> _ufundef;
@@ -312,7 +313,7 @@ Definition compiler_third_part (entries: seq funname) (ps: sprog) : cexec sprog 
 
   ok pd.
 
-Definition compiler_front_end (entries: seq funname) (p: prog) : cexec sprog :=
+Definition compiler_front_end string_of_sr (entries: seq funname) (p: prog) : cexec sprog :=
 
   Let pl := compiler_first_part entries p in
   (* stack + register allocation *)
@@ -324,6 +325,7 @@ Definition compiler_front_end (entries: seq funname) (p: prog) : cexec sprog :=
       true
       shparams
       saparams
+      string_of_sr
       (fresh_var_ident cparams (Reg (Normal, Direct)) dummy_instr_info)
       (global_static_data_symbol cparams)
       (stack_register_symbol cparams)
@@ -365,6 +367,6 @@ Definition compiler_back_end_to_asm (entries: seq funname) (p: sprog) :=
   assemble_prog agparams lp.
 
 Definition compile_prog_to_asm entries (p: prog): cexec asm_prog :=
-  compiler_front_end entries p >>= compiler_back_end_to_asm entries.
+  compiler_front_end cparams.(string_of_sr) entries p >>= compiler_back_end_to_asm entries.
 
 End COMPILER.
