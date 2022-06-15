@@ -93,7 +93,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
         match e with
         | APconst i -> Z.pp_print fmt (Conv.z_of_cz i)
         | APbool b -> Format.fprintf fmt "%b" b
-        | APvar v -> pp_pos fmt v
+        | APvar v -> Format.fprintf fmt "#%a" pp_pos v
         | APget (aa, ws, x, e) -> pp_arr_access pp_pos pp_apexpr pp_pos fmt aa ws x e None
         | APsub (aa, ws, len, x, e) -> pp_arr_access pp_pos pp_apexpr pp_pos fmt aa ws x e (Some len)
         | APapp1 (op, e) -> Format.fprintf fmt "@[<h>(%s@ %a)@]" (PrintCommon.string_of_op1 op) pp_apexpr e

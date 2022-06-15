@@ -325,6 +325,7 @@ Definition compiler_front_end string_of_sr (entries: seq funname) (p: prog) : ce
       true
       shparams
       saparams
+      (ap_is_move_op aparams)
       string_of_sr
       (fresh_var_ident cparams (Reg (Normal, Direct)) dummy_instr_info)
       (global_static_data_symbol cparams)

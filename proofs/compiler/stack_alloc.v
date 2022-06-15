@@ -343,17 +343,34 @@ Fixpoint merge_zones (z1 z2 : abstract_zone) :=
     else None
   end.
 
+Fixpoint disjoint_zones (z1 z2 : abstract_zone) :=
+  match z1, z2 with
+  | [::], _ | _, [::] => false
+  | i1 :: z1, i2 :: z2 =>
+    match is_ap_const i1.(az_ofs), is_ap_const i1.(az_len), is_ap_const i2.(az_ofs), is_ap_const i2.(az_len) with
+    | Some ofs1, Some len1, Some ofs2, Some len2 => (ofs2 + len2 <=? ofs1)%Z || (ofs1 + len1 <=? ofs2)%Z
+    | _, _, _, _ => if i1 == i2 then disjoint_zones z1 z2 else false
+    end
+  end.
+
 (* If one of the zone is a prefix of the other, we take the larger one. Else we
    return Unknown. Not sure it makes sense.
 *)
-Definition clear_status z status :=
-  match status with
-  | Valid => Borrowed z
-  | Unknown => Unknown
-  | Borrowed z2 =>
-    match merge_zones z z2 with
-    | Some z => Borrowed z
-    | None => Unknown
+Definition clear_status rmap z x status :=
+  match Mvar.get rmap.(var_region) x with
+  | None => status (* should not happen *)
+  | Some srx =>
+    let zx := srx.(sr_zone) in
+    if disjoint_zones zx z then status
+    else
+    match status with
+    | Valid => Borrowed z
+    | Unknown => Unknown
+    | Borrowed z2 =>
+      match merge_zones z z2 with
+      | Some z => Borrowed z
+      | None => Unknown
+      end
     end
   end.
 
@@ -362,8 +379,8 @@ Definition clear_status z status :=
   if ByteSet.is_empty bytes then None else Some bytes.
 *)
 
-Definition clear_status_map z (sm:status_map) :=
-  Mvar.map (clear_status z) sm.
+Definition clear_status_map rmap z (sm:status_map) :=
+  Mvar.mapi (clear_status rmap z) sm.
 (* TODO: if optim above, optim below
   let bm := Mvar.filter_map (clear_bytes i) bm in
   if Mvar.is_empty bm then None else Some bm.
@@ -373,16 +390,16 @@ Definition clear_status_map z (sm:status_map) :=
 (* full: true -> the whole region is written so can be marked Valid
          false -> not the whole region is written, so all we can do is to preserve the status
 *)
-Definition set_pure_status rv (x:var) sr (full:bool) :=
+Definition set_pure_status (rmap:region_map) (x:var) sr (full:bool) :=
   let z     := sr.(sr_zone) in
-  let sm    := get_status_map sr.(sr_region) rv in
+  let sm    := get_status_map sr.(sr_region) rmap in
   let status := if full then Valid else get_status x sm
   in
   (* clear all bytes corresponding to z1 *)
-  let sm := clear_status_map z sm in
+  let sm := clear_status_map rmap z sm in
   (* set the bytes *)
   let sm := Mvar.set sm x status in
-  Mr.set rv sr.(sr_region) sm.
+  Mr.set rmap sr.(sr_region) sm.
 
 Definition set_status rv (x:var_i) sr full :=
   Let _     := writable x sr.(sr_region) in
@@ -1225,13 +1242,13 @@ Definition get_Pvar e :=
    but there are probably better ideas.
    TODO: factorize [set_clear_bytes] and [set_pure_bytes] ?
 *)
-Definition set_clear_status rv sr ofs len :=
+Definition set_clear_status (rmap:region_map) sr ofs len :=
   let z     := sr.(sr_zone) in
   let z1    := sub_zone_at_ofs z ofs len in
-  let sm    := get_status_map sr.(sr_region) rv in
+  let sm    := get_status_map sr.(sr_region) rmap in
   (* clear all bytes corresponding to z1 *)
-  let sm := clear_status_map z1 sm in
-  Mr.set rv sr.(sr_region) sm.
+  let sm := clear_status_map rmap z1 sm in
+  Mr.set rmap sr.(sr_region) sm.
 
 Definition set_clear_pure rmap sr ofs len :=
   {| var_region := rmap.(var_region);
@@ -1385,9 +1402,9 @@ Definition lval_table tab r e :=
     Let: (tab, ap) := apexpr_of_pexpr tab e in
     ok ({|
       bindings := Mvar.set tab.(bindings) x ap;
-      counter := Pos.succ tab.(counter)
+      counter := tab.(counter)
     |})
-  | Laset _ _ x _ =>
+  | Laset _ _ x _ | Lasub _ _ _ x _ =>
     ok ({|
       bindings := Mvar.set tab.(bindings) x (APvar tab.(counter));
       counter := Pos.succ tab.(counter)
@@ -1464,6 +1481,8 @@ Definition clean_table_i tab (i:instr) :=
 Definition clean_table tab (c:cmd) :=
   foldl clean_table_i tab c.
 
+Context (is_move_op : asm_op_t -> bool).
+
 Fixpoint alloc_i sao (tab_rmap:table * region_map) (i: instr) : cexec (table * region_map * cmd) :=
   let (tab, rmap) := tab_rmap in
   let (ii, ir) := i in
@@ -1487,11 +1506,21 @@ Fixpoint alloc_i sao (tab_rmap:table * region_map) (i: instr) : cexec (table * r
       else
       Let e  := add_iinfo ii (alloc_es rmap e) in
       Let rs' := add_iinfo ii (alloc_lvals rmap rs (sopn_tout o)) in
-      Let tab := foldM (fun r acc => lval_table acc r (Pconst 0)) tab rs in
+      Let tab :=
+        match rs, o, e with
+        | [:: x], Oasm op, [:: e] =>
+          if is_move_op op then
+            lval_table tab x e
+          else
+            ok (foldl (fun acc r => lval_table_fresh acc r) tab rs)
+        | _, _, _ =>
+          ok (foldl (fun acc r => lval_table_fresh acc r) tab rs)
+        end
+      in
       ok (tab, rs'.1, [:: MkI ii (Copn rs'.2 t o e)])
 
     | Csyscall rs o es =>
-      alloc_syscall ii tab rmap rs o es 
+      alloc_syscall ii tab rmap rs o es
 
     | Cif e c1 c2 => 
       Let e := add_iinfo ii (alloc_e rmap e) in
@@ -1535,6 +1564,8 @@ End PROG.
 End test.
 
 End Section.
+
+Context (is_move_op : asm_op_t -> bool).
 
 Definition init_stack_layout (mglob : Mvar.t (Z * wsize)) sao := 
   let add (xsr: var * wsize * Z) 
@@ -1759,7 +1790,7 @@ Definition alloc_fd_aux string_of_sr p_extra mglob (fresh_reg : Ident.name -> st
     assert_check (local_size <=? sao.(sao_max_size))%Z
                  (stk_ierror_no_var "sao_max_size too small")
   in
-  Let rbody := fmapM (alloc_i' pmap string_of_sr local_alloc sao print_rmap) (tab, rmap) fd.(f_body) in
+  Let rbody := fmapM (alloc_i' pmap string_of_sr local_alloc is_move_op sao print_rmap) (tab, rmap) fd.(f_body) in
   let: (tab, rmap, body) := rbody in
   Let res :=
       check_results pmap rmap paramsi fd.(f_params) sao.(sao_return) fd.(f_res) in

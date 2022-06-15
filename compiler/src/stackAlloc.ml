@@ -175,6 +175,7 @@ let memory_analysis string_of_sr pp_err ~debug print_rmap up =
         false
         Arch.aparams.ap_shp
         Arch.aparams.ap_sap
+        Arch.aparams.ap_is_move_op
         string_of_sr
         (Conv.fresh_var_ident (Reg (Normal, Pointer Writable)) IInfo.dummy)
         crip
