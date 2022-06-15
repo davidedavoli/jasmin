@@ -915,6 +915,8 @@ Definition binding_var t (x:var_i) :=
   | None => Error (stk_ierror_basic x "uninitialized variable")
   end.
 
+(* FIXME: not sure we need to be as precise since lowering is before stack_alloc,
+   a lot of pexpr have already been turned into asm_op *)
 Fixpoint apexpr_of_pexpr t p : cexec (table * abstract_pexpr) :=
   match p with
   | Pconst z => ok (t, APconst z)

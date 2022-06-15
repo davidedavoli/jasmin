@@ -147,27 +147,29 @@ let merge params a1 a2 =
       merge_slices params a s1 s2
     ) a1 a2
 
-let range_of_asub aa ws len gv i =
+let range_of_asub aa ws len _gv i =
   match get_ofs aa ws i with
-  | None -> hierror ~loc:(Lone (L.loc gv)) "cannot compile sub-array %a that has a non-constant start index" pp_var (L.unloc gv)
-  | Some start -> start, start + arr_size ws len
+  | None -> None
+  | Some start -> Some (start, start + arr_size ws len)
 
 let normalize_asub a aa ws len x i =
   let s = normalize_gvar a x in
-  range_in_slice (range_of_asub aa ws len x.gv i) s
+  match range_of_asub aa ws len x.gv i with
+  | None -> None
+  | Some range -> Some (range_in_slice range s)
 
 let slice_of_pexpr a =
   function
   | Parr_init _ -> None
   | Pvar x -> Some (normalize_gvar a x)
-  | Psub (aa, ws, len, x, i) -> Some (normalize_asub a aa ws len x i)
+  | Psub (aa, ws, len, x, i) -> normalize_asub a aa ws len x i
   | (Pconst _ | Pbool _ | Pget _ | Pload _ | Papp1 _ | Papp2 _ | PappN _ ) -> assert false
   | Pif _ -> hierror_no_loc "conditional move of (ptr) arrays is not supported yet"
 
 let slice_of_lval a =
   function
   | Lvar x -> Some (normalize_var a (L.unloc x))
-  | Lasub (aa, ws, len, gv, i) -> Some (normalize_asub a aa ws len { gv ; gs = E.Slocal } i)
+  | Lasub (aa, ws, len, gv, i) -> normalize_asub a aa ws len { gv ; gs = E.Slocal } i
   | (Lmem _ | Laset _ | Lnone _) -> None
 
 let assign_arr params a x e =

@@ -90,12 +90,15 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
             (if aa = Warray_.AAdirect then "." else "")
             pp_btype (U ws) pp_expr e pp_len olen
         in
+        let pp_pos_var fmt x =
+          Format.fprintf fmt "#%a" pp_pos x
+        in
         match e with
         | APconst i -> Z.pp_print fmt (Conv.z_of_cz i)
         | APbool b -> Format.fprintf fmt "%b" b
-        | APvar v -> Format.fprintf fmt "#%a" pp_pos v
-        | APget (aa, ws, x, e) -> pp_arr_access pp_pos pp_apexpr pp_pos fmt aa ws x e None
-        | APsub (aa, ws, len, x, e) -> pp_arr_access pp_pos pp_apexpr pp_pos fmt aa ws x e (Some len)
+        | APvar v -> pp_pos_var fmt v
+        | APget (aa, ws, x, e) -> pp_arr_access pp_pos_var pp_apexpr pp_pos fmt aa ws x e None
+        | APsub (aa, ws, len, x, e) -> pp_arr_access pp_pos_var pp_apexpr pp_pos fmt aa ws x e (Some len)
         | APapp1 (op, e) -> Format.fprintf fmt "@[<h>(%s@ %a)@]" (PrintCommon.string_of_op1 op) pp_apexpr e
         | APapp2 (op, e1, e2)-> Format.fprintf fmt "@[(%a %s@ %a)@]" pp_apexpr e1 (PrintCommon.string_of_op2 op) pp_apexpr e2
         | APappN _ -> assert false
