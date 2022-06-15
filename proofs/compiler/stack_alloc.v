@@ -286,10 +286,28 @@ Definition get_var_status rv r x :=
   let bytes := get_status x bm in
   bytes.
 
+(* FIXME:
+   too ad-hoc: either we don't want Papp1 (Oword_of_int _) here (i.e. we don't introduce it in stack_alloc)
+   or we use constant_prop? *)
+Definition is_ap_const ap :=
+  match ap with
+  | APconst n => Some n
+  | APapp1 (Oword_of_int ws) (APconst n) => Some (wunsigned (wrepr ws n))
+  | _ => None
+  end.
+
+(* special case: if everything is constant, we merge *)
 (* To create a sub-zone, we just append an abstract slice at the end of the current zone.
 *)
-Definition sub_zone_at_ofs z ofs len := 
-  z ++ [:: {| az_ofs := ofs; az_len := len |}].
+Definition sub_zone_at_ofs z ofs len :=
+  match z with
+  | [:: s ] =>
+    match is_ap_const s.(az_ofs), is_ap_const s.(az_len), is_ap_const ofs, is_ap_const len with
+    | Some ofs1, Some len1, Some ofs2, Some len2 => [:: {| az_ofs := APconst (ofs1 + ofs2); az_len := APconst len2 |} ]
+    | _, _, _, _ => z ++ [:: {| az_ofs := ofs; az_len := len |}]
+    end
+  | _ => z ++ [:: {| az_ofs := ofs; az_len := len |}]
+  end.
 
 Definition sub_region_at_ofs sr ofs len :=
   {| sr_region := sr.(sr_region);
@@ -426,6 +444,11 @@ Fixpoint incl_abstract_zone (z1 z2 : abstract_zone) :=
   match z1, z2 with
   | _, [::] => true
   | [::], _ => false
+  | i1 :: z1, [:: i2 ] =>
+    match is_ap_const i1.(az_ofs), is_ap_const i1.(az_len), is_ap_const i2.(az_ofs), is_ap_const i2.(az_len) with
+    | Some ofs1, Some len1, Some ofs2, Some len2 => (ofs2 <=? ofs1)%Z && (ofs1 + len1 <=? ofs2 + len2)%Z
+    | _, _, _, _ => if i1 == i2 then true else false
+    end
   | i1 :: z1, i2 :: z2 =>
     if i1 == i2 then incl_abstract_zone z1 z2
     else false
