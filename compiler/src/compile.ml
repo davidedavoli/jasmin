@@ -166,7 +166,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
                 match s with
                 | Valid -> Format.fprintf fmt "Valid"
                 | Unknown -> Format.fprintf fmt "Unknown"
-                | Borrowed z -> Format.fprintf fmt "Borrowed: @[<h>%a@]" pp_abstract_zone z
+                | Borrowed z -> Format.fprintf fmt "Borrowed: @[<h>%a@]" (Format.pp_print_list pp_abstract_zone) z
               in
               Format.fprintf fmt "%a -> %a -> %a@,"
                 (Printer.pp_var ~debug:true) (Conv.var_of_cvar (Obj.magic r).r_slot)
@@ -184,6 +184,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
 
   let memory_analysis up : Compiler.stack_alloc_oracles =
     StackAlloc.memory_analysis
+      (fun zs -> Conv.cstring_of_string (Format.asprintf "%a" (Format.pp_print_list pp_abstract_zone) zs))
       (fun sr -> Conv.cstring_of_string (Format.asprintf "%a" pp_sub_region sr))
       (Printer.pp_err ~debug:!debug)
       ~debug:!debug
@@ -331,6 +332,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
     {
       Compiler.string_of_sr =
         (fun sr -> Conv.cstring_of_string (Format.asprintf "%a" pp_sub_region sr));
+      Compiler.string_of_borrowed = (fun zs -> Conv.cstring_of_string (Format.asprintf "%a" (Format.pp_print_list pp_abstract_zone) zs));
       Compiler.rename_fd;
       Compiler.expand_fd;
       Compiler.split_live_ranges_fd =
