@@ -97,8 +97,8 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
         | APconst i -> Z.pp_print fmt (Conv.z_of_cz i)
         | APbool b -> Format.fprintf fmt "%b" b
         | APvar v -> pp_pos_var fmt v
-        | APget (aa, ws, x, e) -> pp_arr_access pp_pos_var pp_apexpr pp_pos fmt aa ws x e None
-        | APsub (aa, ws, len, x, e) -> pp_arr_access pp_pos_var pp_apexpr pp_pos fmt aa ws x e (Some len)
+        | APget (aa, ws, x, e) -> pp_arr_access pp_apexpr pp_apexpr pp_pos fmt aa ws x e None
+        | APsub (aa, ws, len, x, e) -> pp_arr_access pp_apexpr pp_apexpr pp_pos fmt aa ws x e (Some len)
         | APapp1 (op, e) -> Format.fprintf fmt "@[<h>(%s@ %a)@]" (PrintCommon.string_of_op1 op) pp_apexpr e
         | APapp2 (op, e1, e2)-> Format.fprintf fmt "@[(%a %s@ %a)@]" pp_apexpr e1 (PrintCommon.string_of_op2 op) pp_apexpr e2
         | APappN _ -> assert false
@@ -184,7 +184,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
 
   let memory_analysis up : Compiler.stack_alloc_oracles =
     StackAlloc.memory_analysis
-      (fun zs -> Conv.cstring_of_string (Format.asprintf "%a" (Format.pp_print_list pp_abstract_zone) zs))
+      (fun zs -> Conv.cstring_of_string (Format.asprintf "%a" (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ",@ ") pp_abstract_zone) zs))
       (fun sr -> Conv.cstring_of_string (Format.asprintf "%a" pp_sub_region sr))
       (Printer.pp_err ~debug:!debug)
       ~debug:!debug
@@ -332,7 +332,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
     {
       Compiler.string_of_sr =
         (fun sr -> Conv.cstring_of_string (Format.asprintf "%a" pp_sub_region sr));
-      Compiler.string_of_borrowed = (fun zs -> Conv.cstring_of_string (Format.asprintf "%a" (Format.pp_print_list pp_abstract_zone) zs));
+      Compiler.string_of_borrowed = (fun zs -> Conv.cstring_of_string (Format.asprintf "%a" (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ",@ ") pp_abstract_zone) zs));
       Compiler.rename_fd;
       Compiler.expand_fd;
       Compiler.split_live_ranges_fd =

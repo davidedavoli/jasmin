@@ -113,8 +113,8 @@ Inductive abstract_pexpr : Set :=
 | APconst : Z -> abstract_pexpr
 | APbool : bool -> abstract_pexpr
 | APvar : positive -> abstract_pexpr
-| APget : arr_access -> wsize -> positive -> abstract_pexpr -> abstract_pexpr
-| APsub : arr_access -> wsize -> positive -> positive -> abstract_pexpr -> abstract_pexpr
+| APget : arr_access -> wsize -> abstract_pexpr -> abstract_pexpr -> abstract_pexpr
+| APsub : arr_access -> wsize -> positive -> abstract_pexpr -> abstract_pexpr -> abstract_pexpr
 | APapp1 : sop1 -> abstract_pexpr -> abstract_pexpr
 | APapp2 : sop2 -> abstract_pexpr -> abstract_pexpr -> abstract_pexpr
 | APappN : opN -> seq abstract_pexpr -> abstract_pexpr
@@ -125,8 +125,8 @@ Fixpoint abstract_pexpr_beq (e1 e2:abstract_pexpr) : bool :=
   | APconst n1   , APconst n2    => n1 == n2
   | APbool  b1   , APbool  b2    => b1 == b2
   | APvar   x1   , APvar   x2    => (x1 == x2)
-  | APget aa1 sz1 x1 e1, APget aa2 sz2 x2 e2 => (aa1 == aa2) && (sz1 == sz2) && (x1 == x2) && abstract_pexpr_beq e1 e2
-  | APsub aa1 sz1 len1 x1 e1, APsub aa2 sz2 len2 x2 e2 => (aa1 == aa2) && (sz1 == sz2) && (len1 == len2) && (x1 == x2) && abstract_pexpr_beq e1 e2
+  | APget aa1 sz1 x1 e1, APget aa2 sz2 x2 e2 => (aa1 == aa2) && (sz1 == sz2) && (abstract_pexpr_beq x1 x2) && abstract_pexpr_beq e1 e2
+  | APsub aa1 sz1 len1 x1 e1, APsub aa2 sz2 len2 x2 e2 => (aa1 == aa2) && (sz1 == sz2) && (len1 == len2) && (abstract_pexpr_beq x1 x2) && abstract_pexpr_beq e1 e2
   | APapp1 o1 e1 , APapp1  o2 e2 => (o1 == o2) && abstract_pexpr_beq e1 e2
   | APapp2 o1 e11 e12, APapp2 o2 e21 e22  =>
      (o1 == o2) && abstract_pexpr_beq e11 e21 && abstract_pexpr_beq e12 e22
@@ -147,8 +147,8 @@ Proof.
   + by apply (iffP idP) => [|[]] /eqP ->.
   + by apply (iffP idP) => [|[]] /eqP ->.
   + by apply (iffP idP) => [|[]] /eqP ->.
-  + by apply (iffP idP) => [/andP[]/andP[]/andP[] | []] /eqP -> /eqP -> /eqP -> /Hrec ->.
-  + by apply (iffP idP) => [/andP[]/andP[]/andP[]/andP[] | []] /eqP -> /eqP -> /eqP -> /eqP -> /Hrec ->.
+  + by apply (iffP idP) => [/andP[]/andP[]/andP[] | []] /eqP -> /eqP -> /Hrec -> /Hrec ->.
+  + by apply (iffP idP) => [/andP[]/andP[]/andP[]/andP[] | []] /eqP -> /eqP -> /eqP -> /Hrec -> /Hrec ->.
   + by apply (iffP idP) => [/andP[] | []] /eqP -> /Hrec ->.
   + by apply (iffP idP) => [/andP[]/andP[] | []] /eqP -> /Hrec -> /Hrec ->.
   + by apply (iffP idP) => [/andP[] | []] /eqP -> /(reflect_all2_eqb Hrec) ->.
@@ -289,10 +289,24 @@ Definition get_var_status rv r x :=
 (* FIXME:
    too ad-hoc: either we don't want Papp1 (Oword_of_int _) here (i.e. we don't introduce it in stack_alloc)
    or we use constant_prop? *)
-Definition is_ap_const ap :=
+Fixpoint is_ap_const ap :=
   match ap with
   | APconst n => Some n
-  | APapp1 (Oword_of_int ws) (APconst n) => Some (wunsigned (wrepr ws n))
+  | APapp1 (Oword_of_int ws) ap =>
+    match is_ap_const ap with
+    | Some n => Some (wunsigned (wrepr ws n))
+    | None => None
+    end
+  | APapp2 o ap1 ap2 =>
+    match is_ap_const ap1, is_ap_const ap2 with
+    | Some n1, Some n2 =>
+      match o with
+      | Oadd _ => Some (n1 + n2)%Z
+      | Omul _ => Some (n1 * n2)%Z
+      | _ => None
+      end
+    | _, _ => None
+    end
   | _ => None
   end.
 
@@ -321,18 +335,22 @@ Definition is_valid status :=
   | _ => false
   end.
 
+
+Section bla.
+Context (string_of_borrowed : list abstract_zone -> string).
+Context (string_of_sr : sub_region -> string).
+
 Fixpoint disjoint_zones (z1 z2 : abstract_zone) :=
   match z1, z2 with
   | [::], _ | _, [::] => false
   | i1 :: z1, i2 :: z2 =>
+    if i1 == i2 then disjoint_zones z1 z2 else
     match is_ap_const i1.(az_ofs), is_ap_const i1.(az_len), is_ap_const i2.(az_ofs), is_ap_const i2.(az_len) with
     | Some ofs1, Some len1, Some ofs2, Some len2 => (ofs2 + len2 <=? ofs1)%Z || (ofs1 + len1 <=? ofs2)%Z
-    | _, _, _, _ => if i1 == i2 then disjoint_zones z1 z2 else false
+    | _, _, _, _ => false
     end
   end.
-Section bla.
-Context (string_of_borrowed : list abstract_zone -> string).
-Context (string_of_sr : sub_region -> string).
+
 Definition check_valid (rmap:region_map) (x:var_i) ofs len :=
   (* we get the status associated to variable [x] *)
   Let sr := get_sub_region rmap x in
@@ -988,18 +1006,20 @@ Fixpoint apexpr_of_pexpr t p : cexec (table * abstract_pexpr) :=
   | Pvar x => Let ap := binding_var t x.(gv) in ok (t, ap)
   | Pget aa ws x p =>
     Let: (t', ap) := apexpr_of_pexpr t p in
-    Let x' := binding_var t' x.(gv) in
+    Let x' := binding_var t' x.(gv) in (*
     match x' with
     | APvar x' => ok (t', APget aa ws x' ap)
     | _ => Error (stk_ierror_basic x.(gv) "not associated a variable")
-    end
+    end *)
+    ok (t', APget aa ws x' ap)
   | Psub aa ws len x e =>
     Let: (t', ap) := apexpr_of_pexpr t e in
-    Let x' := binding_var t' x.(gv) in
+    Let x' := binding_var t' x.(gv) in (*
     match x' with
     | APvar x' => ok (t', APsub aa ws len x' ap)
     | _ => Error (stk_ierror_basic x.(gv) "not associated a variable")
-    end
+    end *)
+    ok (t', APsub aa ws len x' ap)
   | Parr_init _ | Pload _ _ _ =>
     let t' := {| bindings := t.(bindings); counter := Pos.succ t.(counter) |} in
     ok (t', APvar t.(counter))
