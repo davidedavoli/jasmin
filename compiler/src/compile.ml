@@ -182,13 +182,18 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
       Format.eprintf "@[<v>%a@,%a@,%a@]@." Location.pp_iloc (fst ii) pp_tab (fst trmap) pp_rmap (snd trmap)
     in
 
+  let print_trmap ii trmap =
+    if !Glob_options.print_stack_alloc_checker then print_trmap ii trmap;
+    trmap
+  in
+
   let memory_analysis up : Compiler.stack_alloc_oracles =
     StackAlloc.memory_analysis
       (fun zs -> Conv.cstring_of_string (Format.asprintf "%a" (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ",@ ") pp_abstract_zone) zs))
       (fun sr -> Conv.cstring_of_string (Format.asprintf "%a" pp_sub_region sr))
       (Printer.pp_err ~debug:!debug)
       ~debug:!debug
-      (fun ii trmap -> print_trmap ii trmap; trmap)
+      print_trmap
       up
   in
 
@@ -367,7 +372,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
       Compiler.fresh_var_ident = Conv.fresh_var_ident;
       Compiler.is_reg_array;
       Compiler.slh_info;
-      Compiler.print_rmap = (fun ii trmap -> print_trmap ii trmap; trmap);
+      Compiler.print_rmap = print_trmap;
     }
   in
 
