@@ -1120,11 +1120,11 @@ Definition alloc_array_move t (rmap:region_map) r tag e :=
       match vk with
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
-        Let: (e1, e2) := mk_addr_pexpr' rmap yv aa ws vpk e1 in
-        Let: (t', e) := apexpr_of_pexpr t e2 in
+        Let: (e1', e2') := mk_addr_pexpr' rmap yv aa ws vpk e1 in
+        Let: (t', e) := apexpr_of_pexpr t (mk_ofs aa ws e1 0) in
         Let sry := check_vpk rmap yv vpk (Some e) (APconst (arr_size ws len)) in
         let sry' := sub_region_at_ofs sry e (APconst (arr_size ws len)) in
-        ok (t', sry', vpk, e1, e2)
+        ok (t', sry', vpk, e1', e2')
       end
 
     | _      => Error (stk_ierror_no_var "get_Pvar_sub: variable/subarray expected")
@@ -1589,7 +1589,7 @@ Fixpoint alloc_i sao print_rmap (tab_rmap:table * region_map) (i: instr) : cexec
          Let rs := alloc_protect_ptr tab rmap ii r t e msf in
          ok (tab, rs.1, [:: MkI ii rs.2])
       else
-      Let e  := add_iinfo ii (alloc_es rmap e) in
+      Let e'  := add_iinfo ii (alloc_es rmap e) in
       Let rs' := add_iinfo ii (alloc_lvals rmap rs (sopn_tout o)) in
       Let tab :=
         match rs, o, e with
@@ -1602,7 +1602,7 @@ Fixpoint alloc_i sao print_rmap (tab_rmap:table * region_map) (i: instr) : cexec
           ok (foldl (fun acc r => lval_table_fresh acc r) tab rs)
         end
       in
-      ok (tab, rs'.1, [:: MkI ii (Copn rs'.2 t o e)])
+      ok (tab, rs'.1, [:: MkI ii (Copn rs'.2 t o e')])
 
     | Csyscall rs o es =>
       alloc_syscall ii tab rmap rs o es
