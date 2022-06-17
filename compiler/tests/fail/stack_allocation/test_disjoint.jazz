@@ -1,0 +1,16 @@
+// It is expected to fail.
+export fn main (reg u64 i) -> reg u64 {
+  reg u64 res;
+  stack u64[2] s;
+  reg ptr u64[1] r1 r2;
+
+  s[0] = 0;
+  r1 = s[(int)i:1];
+  r1[0] = 0;
+  res = r1[0];
+  r2 = s[(int)i+1:1];
+
+  res += r2[0];
+
+  return res;
+}

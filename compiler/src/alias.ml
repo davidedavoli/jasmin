@@ -152,6 +152,10 @@ let range_of_asub aa ws len _gv i =
   | None -> None
   | Some start -> Some (start, start + arr_size ws len)
 
+(* FIXME: we don't do anything when the offset is not known. This may cause a
+   miscomputation of the alignment of the function. We should certainly still
+   put arrays in the same class.
+*)
 let normalize_asub a aa ws len x i =
   let s = normalize_gvar a x in
   match range_of_asub aa ws len x.gv i with

@@ -1,0 +1,32 @@
+export fn f (reg u64 i) -> reg u64 {
+  reg u64 res;
+  stack u64[4] s;
+  reg ptr u64[2] r;
+  reg ptr u64[1] r1 r2;
+
+  if (i >= 2) {
+    i = 0;
+  }
+  res = 0;
+  s[0] = 3;
+  s[1] = 2;
+  s[2] = 4;
+  s[3] = 5;
+
+  r = s[(int)i:2];
+
+  r1 = r[0:1];
+  r2 = r[1:1];
+
+  r1[0] = 1;
+  res += r[1];
+
+  r[0:1] = r1;
+  r[1:1] = r2;
+
+  s[(int)i:2] = r;
+
+  res += s[0];
+
+  return res;
+}
