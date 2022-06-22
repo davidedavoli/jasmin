@@ -109,35 +109,47 @@ End CmpR.
 Module Mr := Mmake CmpR.
 
 (* ------------------------------------------------------------------ *)
-Inductive abstract_pexpr : Set :=
-| APconst : Z -> abstract_pexpr
-| APbool : bool -> abstract_pexpr
-| APvar : positive -> abstract_pexpr
-| APget : arr_access -> wsize -> abstract_pexpr -> abstract_pexpr -> abstract_pexpr
-| APsub : arr_access -> wsize -> positive -> abstract_pexpr -> abstract_pexpr -> abstract_pexpr
-| APapp1 : sop1 -> abstract_pexpr -> abstract_pexpr
-| APapp2 : sop2 -> abstract_pexpr -> abstract_pexpr -> abstract_pexpr
-| APappN : opN -> seq abstract_pexpr -> abstract_pexpr
-| APif : stype -> abstract_pexpr -> abstract_pexpr -> abstract_pexpr -> abstract_pexpr.
+(* Symbolic expressions *)
 
-Fixpoint abstract_pexpr_beq (e1 e2:abstract_pexpr) : bool :=
+(* We introduce a type of symbolic expressions, which allows to keep track
+   symbolically of the values hold by the variables of the program. Two
+   variables mapped to the same symbolic expression hold the same value
+   in every execution of the program.
+   This type is based on [pexpr] and close to it. The main difference is the
+   absence of constructors corresponding to [Parr_init] and [Pload], which are
+   abstracted away.
+*)
+Inductive spexpr : Set :=
+| SPconst : Z -> spexpr
+| SPbool : bool -> spexpr
+| SPvar : positive -> spexpr
+| SPget : arr_access -> wsize -> spexpr -> spexpr -> spexpr
+| SPsub : arr_access -> wsize -> positive -> spexpr -> spexpr -> spexpr
+| SPapp1 : sop1 -> spexpr -> spexpr
+| SPapp2 : sop2 -> spexpr -> spexpr -> spexpr
+| SPappN : opN -> seq spexpr -> spexpr
+| SPif : stype -> spexpr -> spexpr -> spexpr -> spexpr.
+
+Fixpoint spexpr_beq (e1 e2 : spexpr) : bool :=
   match e1, e2 with
-  | APconst n1   , APconst n2    => n1 == n2
-  | APbool  b1   , APbool  b2    => b1 == b2
-  | APvar   x1   , APvar   x2    => (x1 == x2)
-  | APget aa1 sz1 x1 e1, APget aa2 sz2 x2 e2 => (aa1 == aa2) && (sz1 == sz2) && (abstract_pexpr_beq x1 x2) && abstract_pexpr_beq e1 e2
-  | APsub aa1 sz1 len1 x1 e1, APsub aa2 sz2 len2 x2 e2 => (aa1 == aa2) && (sz1 == sz2) && (len1 == len2) && (abstract_pexpr_beq x1 x2) && abstract_pexpr_beq e1 e2
-  | APapp1 o1 e1 , APapp1  o2 e2 => (o1 == o2) && abstract_pexpr_beq e1 e2
-  | APapp2 o1 e11 e12, APapp2 o2 e21 e22  =>
-     (o1 == o2) && abstract_pexpr_beq e11 e21 && abstract_pexpr_beq e12 e22
-  | APappN o1 es1, APappN o2 es2 =>
-    (o1 == o2) && all2 abstract_pexpr_beq es1 es2
-  | APif t1 b1 e11 e12, APif t2 b2 e21 e22  =>
-     (t1 == t2) && abstract_pexpr_beq b1 b2 && abstract_pexpr_beq e11 e21 && abstract_pexpr_beq e12 e22
+  | SPconst n1   , SPconst n2    => n1 == n2
+  | SPbool  b1   , SPbool  b2    => b1 == b2
+  | SPvar   x1   , SPvar   x2    => (x1 == x2)
+  | SPget aa1 sz1 x1 e1, SPget aa2 sz2 x2 e2 =>
+    (aa1 == aa2) && (sz1 == sz2) && (spexpr_beq x1 x2) && spexpr_beq e1 e2
+  | SPsub aa1 sz1 len1 x1 e1, SPsub aa2 sz2 len2 x2 e2 =>
+    (aa1 == aa2) && (sz1 == sz2) && (len1 == len2) && (spexpr_beq x1 x2) && spexpr_beq e1 e2
+  | SPapp1 o1 e1 , SPapp1  o2 e2 => (o1 == o2) && spexpr_beq e1 e2
+  | SPapp2 o1 e11 e12, SPapp2 o2 e21 e22  =>
+    (o1 == o2) && spexpr_beq e11 e21 && spexpr_beq e12 e22
+  | SPappN o1 es1, SPappN o2 es2 =>
+    (o1 == o2) && all2 spexpr_beq es1 es2
+  | SPif t1 b1 e11 e12, SPif t2 b2 e21 e22  =>
+    (t1 == t2) && spexpr_beq b1 b2 && spexpr_beq e11 e21 && spexpr_beq e12 e22
   | _, _ => false
   end.
 
-Lemma abstract_pexpr_eq_axiom : Equality.axiom abstract_pexpr_beq.
+Lemma spexpr_eq_axiom : Equality.axiom spexpr_beq.
 Proof.
   rewrite /Equality.axiom.
   fix Hrec 1; move =>
@@ -155,34 +167,56 @@ Proof.
   by apply (iffP idP) => [/andP[]/andP[]/andP[] | []] /eqP -> /Hrec -> /Hrec -> /Hrec ->.
 Qed.
 
-Definition abstract_pexpr_eqMixin := Equality.Mixin abstract_pexpr_eq_axiom.
-Canonical  abstract_pexpr_eqType  := Eval hnf in EqType abstract_pexpr abstract_pexpr_eqMixin.
+Definition spexpr_eqMixin := Equality.Mixin spexpr_eq_axiom.
+Canonical  spexpr_eqType  := Eval hnf in EqType spexpr spexpr_eqMixin.
 
-Record abstract_slice := {
-  az_ofs : abstract_pexpr;
-  az_len : abstract_pexpr;
+(* ------------------------------------------------------------------ *)
+
+(* A slice represents a contiguous portion of memory.
+  We have them in two flavors:
+  - [concrete_slice] where the components are integers; concrete slices are used
+    to describe the shape of the stack, since we know everything statically.
+  - [symbolic_slice] where the components are symbolic expressions; symbolic
+    slices are used in the analysis, since there we do not necessarily know the
+    offsets statically. In some places, we treat the case of [SPconst]
+    particularly to recover some precision in the case everything is constant.
+*)
+Record concrete_slice := {
+  cs_ofs : Z;
+  cs_len : Z;
 }.
 
-Definition abstract_zone := list abstract_slice.
+Record symbolic_slice := {
+  ss_ofs : spexpr;
+  ss_len : spexpr;
+}.
 
-Definition abstract_slice_beq s1 s2 :=
-  (s1.(az_ofs) == s2.(az_ofs)) && (s1.(az_len) == s2.(az_len)).
+Definition symbolic_slice_beq s1 s2 :=
+  (s1.(ss_ofs) == s2.(ss_ofs)) && (s1.(ss_len) == s2.(ss_len)).
 
-Lemma abstract_slice_eq_axiom : Equality.axiom abstract_slice_beq.
+Lemma symbolic_slice_eq_axiom : Equality.axiom symbolic_slice_beq.
 Proof.
   rewrite /Equality.axiom.
   move=> [ofs1 len1] [ofs2 len2].
   by apply:(iffP andP) => /= [[/eqP -> /eqP ->] | [-> ->]].
 Qed.
 
-Definition abstract_slice_eqMixin := Equality.Mixin abstract_slice_eq_axiom.
-Canonical  abstract_slice_eqType  := EqType abstract_slice abstract_slice_eqMixin.
+Definition symbolic_slice_eqMixin := Equality.Mixin symbolic_slice_eq_axiom.
+Canonical  symbolic_slice_eqType  := EqType symbolic_slice symbolic_slice_eqMixin.
+
+(* A symbolic zone is a memory portion written as a list of symbolic slices,
+   each slice being included in the previous one.
+   For instance, [i, j][k, l], is the [k, l]-slice of the [i, j]-slice. It could
+   also be described as the slice [i+k, l]. We store it as [i, j][k, l]
+   because it helps to remember some structure.
+*)
+Definition symbolic_zone := seq symbolic_slice.
 
 (* ------------------------------------------------------------------ *)
 (* A zone inside a region. *)
 Record sub_region := {
     sr_region : region;
-    sr_zone  : abstract_zone;
+    sr_zone  : symbolic_zone;
   }.
 
 Definition sub_region_beq sr1 sr2 := 
@@ -198,21 +232,16 @@ Definition sub_region_eqMixin := Equality.Mixin sub_region_eq_axiom.
 Canonical sub_region_eqType := EqType sub_region sub_region_eqMixin.
 
 (* ------------------------------------------------------------------ *)
-Record zone := {
-  z_ofs : Z;
-  z_len : Z;
-}.
-
 (* idea: could we use a gvar instead of var & v_scope? *)
 Variant ptr_kind_init :=
-| PIdirect of var & zone & v_scope
+| PIdirect of var & concrete_slice & v_scope
 | PIregptr of var
-| PIstkptr of var & zone & var.
+| PIstkptr of var & concrete_slice & var.
 
 Variant ptr_kind :=
-| Pdirect of var & Z & wsize & zone & v_scope
+| Pdirect of var & Z & wsize & concrete_slice & v_scope
 | Pregptr of var
-| Pstkptr of var & Z & wsize & zone & var.
+| Pstkptr of var & Z & wsize & concrete_slice & var.
 
 Record param_info := { 
   pp_ptr      : var;
@@ -234,7 +263,7 @@ Record pos_map := {
 Definition check_align x (sr:sub_region) ws :=
   Let _ := assert (ws <= sr.(sr_region).(r_align))%CMP
                   (stk_ierror_basic x "unaligned offset") in
-  (* FIXME STACK: how to check the alignment? *)
+  (* FIXME SYMBOLIC: how to check the alignment ? *)
 (*  assert (Z.land sr.(sr_zone).(z_ofs) (wsize_size ws - 1) == 0)%Z
          (stk_ierror_basic x "unaligned sub offset"). *)
   ok tt.
@@ -245,17 +274,21 @@ Definition writable (x:var_i) (r:region) :=
 
 Module Region.
 
+(* A status synthetizes what we know about a sub-region. *)
 Variant status :=
-| Valid
-| Unknown (* or Invalid? *)
-| Borrowed of list abstract_zone.
+| Valid (* The sub-region is fully valid, we can read everywhere. *)
+| Unknown (* We don't know anything about the sub-region. *)
+| Borrowed of seq symbolic_zone.
+  (* Some parts of the sub-region are "borrowed" by other variables, we cannot
+     read in them. We remember a list of non-necessarily disjoint symbolic zones
+     that are borrowed. *)
 
 Definition status_map := Mvar.t status.
 
 Record region_map := {
-  var_region : Mvar.t sub_region; (* The region where the value is initialy stored            *)
-  region_var :> Mr.t status_map;     (* The set of source variables whose value is in the region *)
-    (* region -> var -> ByteSet.t *)
+  var_region : Mvar.t sub_region; (* the region associated to the source variable     *)
+  region_var :> Mr.t status_map;  (* the status associated to variables in the region *)
+    (* region -> var -> status *)
 }.
 
 Definition empty_status_map := Mvar.empty status.
@@ -277,28 +310,25 @@ Definition get_status_map (r:region) rv : status_map :=
 Definition get_status (x:var) (status_map:status_map) :=
   odflt Unknown (Mvar.get status_map x).
 
-Definition interval_of_zone z := 
-  {| imin := z.(z_ofs); imax := z.(z_ofs) + z.(z_len) |}.
-
-(* FIXME STACK: do we really want to have default value or should we throw an error if not in the table? *)
+(* FIXME SYMBOLIC: do we really want to have a default value or should we throw
+   an error if not in the table? *)
 Definition get_var_status rv r x :=
   let bm := get_status_map r rv in
   let bytes := get_status x bm in
   bytes.
 
-(* FIXME:
-   too ad-hoc: either we don't want Papp1 (Oword_of_int _) here (i.e. we don't introduce it in stack_alloc)
-   or we use constant_prop? *)
-Fixpoint is_ap_const ap :=
-  match ap with
-  | APconst n => Some n
-  | APapp1 (Oword_of_int ws) ap =>
-    match is_ap_const ap with
+(* FIXME SYMBOLIC: this is completely ad-hoc. Could we reuse something standard
+   from sem and/or constant_prop? *)
+Fixpoint is_spexpr_const sp :=
+  match sp with
+  | SPconst n => Some n
+  | SPapp1 (Oword_of_int ws) sp =>
+    match is_spexpr_const sp with
     | Some n => Some (wunsigned (wrepr ws n))
     | None => None
     end
-  | APapp2 o ap1 ap2 =>
-    match is_ap_const ap1, is_ap_const ap2 with
+  | SPapp2 o sp1 sp2 =>
+    match is_spexpr_const sp1, is_spexpr_const sp2 with
     | Some n1, Some n2 =>
       match o with
       | Oadd _ => Some (n1 + n2)%Z
@@ -310,18 +340,29 @@ Fixpoint is_ap_const ap :=
   | _ => None
   end.
 
-(* special case: if everything is constant, we merge *)
-(* the special case is only for 1-element lists, we should probably do it for any last element *)
-(* To create a sub-zone, we just append an abstract slice at the end of the current zone.
+Fixpoint split_last A (s : seq A) :=
+  match s with
+  | [::] => None
+  | a :: l =>
+    match split_last l with
+    | None => Some ([::], a)
+    | Some (l, b) => Some (a::l, b)
+    end
+  end.
+
+(* Returns the sub-zone of [z] starting at offset [ofs] and of length [len].
+   If [ofs] and [len] are constants, we look at the last slice [i, j] of the
+   zone. If i and j are constants too, we merge the two slices, giving
+   [i+ofs, len]. Otherwise, we just add the slice at the end of the zone.
 *)
 Definition sub_zone_at_ofs z ofs len :=
-  match z with
-  | [:: s ] =>
-    match is_ap_const s.(az_ofs), is_ap_const s.(az_len), is_ap_const ofs, is_ap_const len with
-    | Some ofs1, Some len1, Some ofs2, Some len2 => [:: {| az_ofs := APconst (ofs1 + ofs2); az_len := APconst len2 |} ]
-    | _, _, _, _ => z ++ [:: {| az_ofs := ofs; az_len := len |}]
+  match split_last z with
+  | None => [:: {| ss_ofs := ofs; ss_len := len |}]
+  | Some (z', s) =>
+    match is_spexpr_const s.(ss_ofs), is_spexpr_const s.(ss_len), is_spexpr_const ofs, is_spexpr_const len with
+    | Some ofs1, Some len1, Some ofs2, Some len2 => z' ++ [:: {| ss_ofs := SPconst (ofs1 + ofs2); ss_len := SPconst len2 |}]
+    | _, _, _, _ => z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
     end
-  | _ => z ++ [:: {| az_ofs := ofs; az_len := len |}]
   end.
 
 Definition sub_region_at_ofs sr ofs len :=
@@ -329,81 +370,64 @@ Definition sub_region_at_ofs sr ofs len :=
      sr_zone   := sub_zone_at_ofs sr.(sr_zone) ofs len
   |}.
 
-Definition is_valid status :=
-  match status with
-  | Valid => true
-  | _ => false
-  end.
-
-
-Section bla.
-Context (string_of_borrowed : list abstract_zone -> string).
-Context (string_of_sr : sub_region -> string).
-
-Fixpoint disjoint_zones (z1 z2 : abstract_zone) :=
+(* Returns whether two zones are disjoint. Since we manipulate symbolic
+   expressions, most of the time we cannot answer positively. In presence of
+   constants, we have a precise check.
+*)
+Fixpoint disjoint_zones (z1 z2 : symbolic_zone) :=
   match z1, z2 with
   | [::], _ | _, [::] => false
-  | i1 :: z1, i2 :: z2 =>
-    if i1 == i2 then disjoint_zones z1 z2 else
-    match is_ap_const i1.(az_ofs), is_ap_const i1.(az_len), is_ap_const i2.(az_ofs), is_ap_const i2.(az_len) with
+  | s1 :: z1, s2 :: z2 =>
+    if s1 == s2 then disjoint_zones z1 z2 else
+    match is_spexpr_const s1.(ss_ofs), is_spexpr_const s1.(ss_len), is_spexpr_const s2.(ss_ofs), is_spexpr_const s2.(ss_len) with
     | Some ofs1, Some len1, Some ofs2, Some len2 => (ofs2 + len2 <=? ofs1)%Z || (ofs1 + len1 <=? ofs2)%Z
     | _, _, _, _ => false
     end
   end.
 
+(* FIXME SYMBOLIC: do we really need to return two sub-regions? *)
 Definition check_valid (rmap:region_map) (x:var_i) ofs len :=
   (* we get the status associated to variable [x] *)
   Let sr := get_sub_region rmap x in
   let status := get_var_status rmap sr.(sr_region) x in
-  let b :=
+  let sr' := sub_region_at_ofs sr ofs len in
+  let valid :=
     match status with
     | Valid => true
     | Unknown => false
-    | Borrowed z =>
-      let z' :=
-        match ofs with
-        | Some ofs => sub_zone_at_ofs sr.(sr_zone) ofs len
-        | _ => sr.(sr_zone)
-        end
-      in
-      all (disjoint_zones z') z
+    | Borrowed z => all (disjoint_zones sr'.(sr_zone)) z
     end
   in
-  Let _ := assert b
-      (stk_error x (pp_box [:: pp_s "the region ";
-                               pp_s (string_of_sr sr);
-                               pp_s 
-                               (match ofs with
-                               | None => ""
-                               | Some ofs => string_of_sr {| sr_region := sr.(sr_region); sr_zone := sub_zone_at_ofs sr.(sr_zone) ofs len |}
-                               end);
-                               pp_s " associated to variable"; pp_var x; pp_s "is partial.";
-                               pp_s "It is in conflict with zone ";
-                               pp_s
-                               (match status with
-                               | Borrowed z => string_of_borrowed z
-                               | _ => ""
-                               end)]))
-  in
-  ok sr.
-End bla.
+  Let _ :=
+    assert valid
+      (stk_error x (pp_box [:: pp_s "the region associated to variable"; pp_var x; pp_s "is partial"])) in
+  ok (sr, sr').
 
-(* FIXME: we could try to add a special case when everything is static, but not necessarily needed
-   since we test inclusion at other places *)
-Fixpoint merge_zones (z1 z2 : abstract_zone) :=
+(* We don't try to be clever here (e.g. no special case when everything is
+   constant). This is not needed, since we check systematically inclusion in
+   other places. We can thus afford to potentially introduce a bit of redundant
+   information here.
+
+   We could also define this function as:
+   if incl z1 z2 then Some z2 else if incl z2 z1 then Some z1 else None
+*)
+Fixpoint merge_zones (z1 z2 : symbolic_zone) :=
   match z1, z2 with
   | [::], _ => Some z2
   | _, [::] => Some z1
-  | i1 :: z1, i2 :: z2 =>
-    if i1 == i2 then
+  | s1 :: z1, s2 :: z2 =>
+    if s1 == s2 then
       match merge_zones z1 z2 with
-      | Some z => Some (i1 :: z)
+      | Some z => Some (s1 :: z)
       | None => None
       end
     else None
   end.
 
-Fixpoint insert_zone (z : abstract_zone) (zs : list abstract_zone) :=
+(* If we can merge [z] with one of the zones in [zs], we do it. Otherwise,
+   we add [z] at the end.
+*)
+Fixpoint insert_zone (z : symbolic_zone) (zs : seq symbolic_zone) :=
   match zs with
   | [::] => [:: z]
   | z1 :: zs =>
@@ -413,90 +437,90 @@ Fixpoint insert_zone (z : abstract_zone) (zs : list abstract_zone) :=
     end
   end.
 
-(* If one of the zone is a prefix of the other, we take the larger one. Else we
-   return Unknown. Not sure it makes sense.
-*)
-Definition clear_status rmap z x status :=
-  match Mvar.get rmap.(var_region) x with
-  | None => status (* should not happen *)
-  | Some srx =>
-    let zx := srx.(sr_zone) in
-    if disjoint_zones zx z then status
-    else
-    match status with
-    | Valid => Borrowed [::z]
-    | Unknown => Unknown
-    | Borrowed z2 => (* Borrowed (z::z2) *)
-      Borrowed (insert_zone z z2) (*
-      match oseq.omap (merge_zones z) z2 with
-      | Some z => Borrowed z
-      | None => Unknown
-      end *)
-    end
+Definition clear_status z status :=
+  match status with
+  | Valid => Borrowed [:: z]
+  | Unknown => Unknown
+  | Borrowed z2 => Borrowed (insert_zone z z2)
   end.
 
-(* TODO: check optim
-  let bytes := ByteSet.remove bytes i in
-  if ByteSet.is_empty bytes then None else Some bytes.
-*)
+Definition clear_status_map z (sm:status_map) :=
+  Mvar.map (clear_status z) sm.
 
-Definition clear_status_map rmap z (sm:status_map) :=
-  Mvar.mapi (clear_status rmap z) sm.
-(* TODO: if optim above, optim below
-  let bm := Mvar.filter_map (clear_bytes i) bm in
-  if Mvar.is_empty bm then None else Some bm.
-*)
+Fixpoint incl_zones (z1 z2 : symbolic_zone) :=
+  match z1, z2 with
+  | _, [::] => true
+  | [::], _ => false
+  | s1 :: z1, [:: s2] =>
+    (s1 == s2) ||
+    match is_spexpr_const s1.(ss_ofs), is_spexpr_const s1.(ss_len), is_spexpr_const s2.(ss_ofs), is_spexpr_const s2.(ss_len) with
+    | Some ofs1, Some len1, Some ofs2, Some len2 => (ofs2 <=? ofs1)%Z && (ofs1 + len1 <=? ofs2 + len2)%Z
+    | _, _, _, _ => false
+    end
+  | s1 :: z1, s2 :: z2 =>
+    (s1 == s2) && incl_zones z1 z2
+  end.
 
-(* TODO: take [bytes] as an argument ? *)
-(* full: true -> the whole region is written so can be marked Valid
-         false -> not the whole region is written, so all we can do is to preserve the status
+(* We don't take ofs and len as args any more.
+   [sr] should be [sub_region_at_ofs sr ofs len].
 *)
-Definition set_pure_status (rmap:region_map) (x:var) sr (full:bool) ofs len :=
-  let z     :=
-    match ofs with
-    | Some ofs => sub_zone_at_ofs sr.(sr_zone) ofs len
-    | None => sr.(sr_zone)
+Definition set_pure_status rv (x:var) sr :=
+  let sm     := get_status_map sr.(sr_region) rv in
+  let status := get_status x sm in
+  let status :=
+    match status with
+    | Valid => Valid
+    | Unknown => Unknown
+    | Borrowed zs =>
+      match filter (fun z => negb (incl_zones z sr.(sr_zone))) zs with
+      | [::] => Valid (* actually, Valid could be defined as Borrowed [::] *)
+      | zs => Borrowed zs
+      end
     end
   in
-  let sm    := get_status_map sr.(sr_region) rmap in
-  let status := if full then Valid else get_status x sm
-  in
-  (* clear all bytes corresponding to z1 *)
-  let sm := clear_status_map rmap z sm in
-  (* set the bytes *)
+  (* clear status corresponding to z1 *)
+  let sm := clear_status_map sr.(sr_zone) sm in
+  (* set the new status *)
   let sm := Mvar.set sm x status in
-  Mr.set rmap sr.(sr_region) sm.
+  Mr.set rv sr.(sr_region) sm.
 
-Definition set_status rv (x:var_i) sr full ofs len :=
+Definition set_status rv (x:var_i) sr :=
   Let _     := writable x sr.(sr_region) in
-  ok (set_pure_status rv x sr full ofs len).
+  ok (set_pure_status rv x sr).
 
 (* TODO: as many functions are similar, maybe we could have one big function
    taking flags as arguments that tell whether we have to check align/check valid... *)
-Definition set_sub_region rmap (x:var_i) sr full ofs len :=
-  Let rv := set_status rmap x sr full ofs len in
+Definition set_sub_region rmap (x:var_i) sr :=
+  Let rv := set_status rmap x sr in
   ok {| var_region := Mvar.set rmap.(var_region) x sr;
         region_var := rv |}.
 
-Definition sub_region_stkptr s ws z :=
+Definition sub_region_stkptr s ws cs :=
   let r := {| r_slot := s; r_align := ws; r_writable := true |} in
+  let z := [:: {| ss_ofs := SPconst cs.(cs_ofs); ss_len := SPconst cs.(cs_len) |}] in
   {| sr_region := r; sr_zone := z |}.
 
-Section test.
-Context (string_of_borrowed : list abstract_zone -> string) (string_of_sr : sub_region -> string).
 Section WITH_POINTER_DATA.
 Context {pd: PointerData}.
 
-Definition set_stack_ptr (rmap:region_map) s ws z (x':var) :=
-  let sr := sub_region_stkptr s ws z in
-  let rv := set_pure_status rmap x' sr true (Some (APconst 0)) (APconst (wsize_size Uptr)) in
+Definition set_stack_ptr (rmap:region_map) s ws cs (x':var) :=
+  let sr := sub_region_stkptr s ws cs in
+  let sr := sub_region_at_ofs sr (SPconst 0) (SPconst (wsize_size Uptr)) in
+  let rv := set_pure_status rmap x' sr in
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
+Definition is_valid status :=
+  match status with
+  | Valid => true
+  | _ => false
+  end.
+
 (* TODO: fusion with check_valid ? *)
+(* FIXME SYMBOLIC: the comment of "let z :=" seems strange *)
 Definition check_stack_ptr rmap s ws z x' :=
   let sr := sub_region_stkptr s ws z in
-  let z := sub_zone_at_ofs z (APconst 0)%Z (APconst (wsize_size Uptr)) in
+(*   let z := sub_zone_at_ofs z (SPconst 0) (SPconst (wsize_size Uptr)) in *)
   let status := get_var_status rmap sr.(sr_region) x' in
   is_valid status.
 
@@ -505,7 +529,8 @@ End WITH_POINTER_DATA.
 (* Precondition size_of x = ws && length sr.sr_zone = wsize_size ws *)
 Definition set_word rmap (x:var_i) sr ws :=
   Let _ := check_align x sr ws in
-  set_sub_region rmap x sr true (Some (APconst 0)) (APconst (size_slot x)).
+  let sr := sub_region_at_ofs sr (SPconst 0) (SPconst (size_slot x)) in
+  set_sub_region rmap x sr.
 
 (* If we write to array [x] at offset [ofs], we invalidate the corresponding
    memory zone for the other variables, and mark it as valid for [x].
@@ -518,36 +543,25 @@ Definition set_word rmap (x:var_i) sr ws :=
 Definition set_arr_word (rmap:region_map) (x:var_i) ofs ws :=
   Let sr := get_sub_region rmap x in
   Let _ := check_align x sr ws in
-  set_sub_region rmap x sr false ofs (APconst (wsize_size ws)).
+  let sr := sub_region_at_ofs sr ofs (SPconst (wsize_size ws)) in
+  set_sub_region rmap x sr.
 
-Definition set_arr_call rmap x sr := set_sub_region rmap x sr true (Some (APconst 0)) (APconst (size_slot x)).
+Definition set_arr_call rmap (x:var_i) sr :=
+  let sr := sub_region_at_ofs sr (SPconst O) (SPconst (size_slot x)) in
+  set_sub_region rmap x sr.
 
-(* could be defined as merge_zones z1 z2 == z1 *)
-Fixpoint incl_abstract_zone (z1 z2 : abstract_zone) :=
-  match z1, z2 with
-  | _, [::] => true
-  | [::], _ => false
-  | i1 :: z1, [:: i2 ] =>
-    match is_ap_const i1.(az_ofs), is_ap_const i1.(az_len), is_ap_const i2.(az_ofs), is_ap_const i2.(az_len) with
-    | Some ofs1, Some len1, Some ofs2, Some len2 => (ofs2 <=? ofs1)%Z && (ofs1 + len1 <=? ofs2 + len2)%Z
-    | _, _, _, _ => if i1 == i2 then true else false
-    end
-  | i1 :: z1, i2 :: z2 =>
-    if i1 == i2 then incl_abstract_zone z1 z2
-    else false
-  end.
-
-Definition set_move_sub_status rv x sr :=
+(* TODO SYMBOLIC: only one difference with set_pure_bytes, we don't clear the map *)
+Definition set_move_status rv x sr :=
   let sm := get_status_map sr.(sr_region) rv in
   let status := get_status x sm in
   let status :=
     match status with
     | Valid => Valid
     | Unknown => Unknown
-    | Borrowed z =>
-      match filter (fun z' => negb (incl_abstract_zone z' sr.(sr_zone))) z with
-      | [::] => Valid
-      | l => Borrowed l
+    | Borrowed zs =>
+      match filter (fun z => negb (incl_zones z sr.(sr_zone))) zs with
+      | [::] => Valid (* actually, Valid could be defined as Borrowed [::] *)
+      | zs => Borrowed zs
       end
     end
   in
@@ -555,7 +569,7 @@ Definition set_move_sub_status rv x sr :=
   Mr.set rv sr.(sr_region) sm.
 
 Definition set_move_sub (rmap:region_map) x sr :=
-  let rv := set_move_sub_status rmap x sr in
+  let rv := set_move_status rmap x sr in
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
@@ -566,20 +580,9 @@ Definition set_arr_sub (rmap:region_map) (x:var_i) ofs len sr_from :=
                   (stk_ierror x
                     (pp_box [::
                       pp_s "the assignment to sub-array"; pp_var x;
-                      pp_s "cannot be turned into a nop: source (";
-                      pp_vbox [::
-                      pp_s (string_of_sr sr_from);
-                      pp_s ") and destination (";
-                      pp_s (string_of_sr sr')
-                      ];
-                      pp_s ") regions are not equal"]))
+                      pp_s "cannot be turned into a nop: source and destination regions are not equal"]))
   in
   ok (set_move_sub rmap x sr').
-
-Definition set_move_status rv x sr :=
-  let sm := get_status_map sr.(sr_region) rv in
-  let sm := Mvar.set sm x Valid in
-  Mr.set rv sr.(sr_region) sm.
 
 (* identical to [set_sub_region], except clearing
    TODO: fusion with set_arr_sub ? not sure its worth
@@ -589,42 +592,33 @@ Definition set_move (rmap:region_map) (x:var) sr :=
   {| var_region := Mvar.set rmap.(var_region) x sr;
      region_var := rv |}.
 
-Definition set_arr_init (rmap:region_map) x sr :=
-  let sm := get_status_map sr.(sr_region) rmap in
-  let sm := Mvar.set sm x Valid in
- {|
-  var_region := Mvar.set rmap.(var_region) x sr;
-  region_var := Mr.set rmap sr.(sr_region) sm
-  |}.
+Definition set_arr_init rmap x sr := set_move rmap x sr.
 
-(* should we use incl_abstract_zone ? Probably *)
-Definition le_status s1 s2 :=
-  match s1, s2 with
+Definition incl_status status1 status2 :=
+  match status1, status2 with
   | Unknown, _ => true
   | _, Valid => true
-  | Borrowed z1, Borrowed z2 => z1 == z2
+  | Borrowed zs1, Borrowed zs2 => all (fun z => has (incl_zones z) zs2) zs1
   | _, _ => false
   end.
 
 Definition incl_status_map (_r: region) (sm1 sm2: status_map) := 
-  Mvar.incl (fun x => le_status) sm1 sm2.
+  Mvar.incl (fun _ => incl_status) sm1 sm2.
 
 Definition incl (rmap1 rmap2:region_map) :=
   Mvar.incl (fun x r1 r2 => r1 == r2) rmap1.(var_region) rmap2.(var_region) &&
   Mr.incl incl_status_map rmap1.(region_var) rmap2.(region_var).
 
-(* looks a lot like clean_status, can we merge implementations? *)
-Definition merge_status (x:var) (s1 s2 : option status) := 
-  match s1, s2 with
-  | Some s1, Some s2 =>
-    match s1, s2 with
-    | Valid, _ => Some s2
-    | _, Valid => Some s1
-    | Unknown, _ => None
-    | _, Unknown => None
-    | Borrowed z1, Borrowed z2 =>
-      Some (Borrowed (foldl (fun z2 z => insert_zone z z2) z1 z2))
-(*     Some (Borrowed (z1 ++ z2)) *)
+(* FIXME SYMBOLIC: looks a lot like clean_status, can we merge implementations? *)
+Definition merge_status (x:var) (status1 status2: option status) :=
+  match status1, status2 with
+  | Some status1, Some status2 =>
+    match status1, status2 with
+    | Valid, _ => Some status2
+    | _, Valid => Some status1
+    | Unknown, _ | _, Unknown => None
+    | Borrowed zs1, Borrowed zs2 =>
+      Some (Borrowed (foldl (fun zs1 z2 => insert_zone z2 zs1) zs1 zs2))
     end
   | _, _ => None
   end.
@@ -647,16 +641,12 @@ Definition merge (rmap1 rmap2:region_map) :=
         end) rmap1.(var_region) rmap2.(var_region);
      region_var := Mr.map2 merge_status_map rmap1.(region_var) rmap2.(region_var) |}.
 
-End test.
-
 End Region.
 
 Import Region.
 
 Section WITH_PARAMS.
 
-Context (string_of_borrowed : list abstract_zone -> string)
-        (string_of_sr : sub_region -> string).
 Context
   {asm_op : Type}
   {pd : PointerData}
@@ -673,10 +663,6 @@ Definition mk_ofs aa ws e1 ofs :=
     cast_const (i * sz + ofs)%Z
   else 
     add (mul (cast_const sz) (cast_ptr e1)) (cast_const ofs).
-
-Definition mk_ofsi aa ws e1 := 
-  if is_const e1 is Some i then Some (i * (mk_scale aa ws))%Z
-  else None.
 
 Section CHECK.
 
@@ -776,7 +762,7 @@ Definition base_ptr sc :=
 
 Definition addr_from_pk (x:var_i) (pk:ptr_kind) :=
   match pk with
-  | Pdirect _ ofs _ z sc => ok (with_var x (base_ptr sc), ofs + z.(z_ofs))
+  | Pdirect _ ofs _ cs sc => ok (with_var x (base_ptr sc), ofs + cs.(cs_ofs))
   | Pregptr p            => ok (with_var x p,             0)
   | Pstkptr _ _ _ _ _    =>
     Error (stk_error x (pp_box [::
@@ -806,7 +792,7 @@ Definition get_var_kind x :=
     ok (omap VKptr (get_local xv)).
 
 Definition sub_region_full x r :=
-  let z := [:: {| az_ofs := APconst 0; az_len := APconst (size_slot x) |}] in
+  let z := [:: {| ss_ofs := SPconst 0; ss_len := SPconst (size_slot x) |}] in
   {| sr_region := r; sr_zone := z |}.
 
 Definition sub_region_glob x ws :=
@@ -816,9 +802,10 @@ Definition sub_region_glob x ws :=
 Definition check_vpk rmap (x:var_i) vpk ofs len :=
   match vpk with
   | VKglob (_, ws) =>
-    ok (sub_region_glob x ws)
-  | VKptr _pk =>
-    check_valid string_of_borrowed string_of_sr rmap x ofs len
+    let sr := sub_region_glob x ws in
+    ok (sr, sub_region_at_ofs sr ofs len)
+  | VKptr _pk => 
+    check_valid rmap x ofs len
   end.
 
 (* We could write [check_vpk] as follows.
@@ -834,42 +821,86 @@ Definition check_vpk rmap (x:var_i) vpk ofs len :=
 *)
 
 Definition check_vpk_word rmap x vpk ofs ws :=
-  Let sr := check_vpk rmap x vpk ofs (APconst (wsize_size ws)) in
-  check_align x sr ws.
+  Let srs := check_vpk rmap x vpk ofs (SPconst (wsize_size ws)) in
+  check_align x srs.1 ws.
 
-Fixpoint alloc_e (e:pexpr) := 
+Record table := {
+  bindings : Mvar.t spexpr;
+  counter : positive;
+}.
+
+Definition binding_var t (x:var_i) :=
+  match Mvar.get t.(bindings) x with
+  | Some sp => ok sp
+  | None => Error (stk_ierror_basic x "uninitialized variable")
+  end.
+
+(* FIXME: not sure we need to be as precise since lowering is before stack_alloc,
+   a lot of pexpr have already been turned into asm_op *)
+Fixpoint spexpr_of_pexpr t p : cexec (table * spexpr) :=
+  match p with
+  | Pconst z => ok (t, SPconst z)
+  | Pbool b => ok (t, SPbool b)
+  | Pvar x => Let sp := binding_var t x.(gv) in ok (t, sp)
+  | Pget aa ws x p =>
+    Let: (t', sp) := spexpr_of_pexpr t p in
+    Let x' := binding_var t' x.(gv) in
+    ok (t', SPget aa ws x' sp)
+  | Psub aa ws len x e =>
+    Let: (t', sp) := spexpr_of_pexpr t e in
+    Let x' := binding_var t' x.(gv) in
+    ok (t', SPsub aa ws len x' sp)
+  | Parr_init _ | Pload _ _ _ =>
+    let t' := {| bindings := t.(bindings); counter := Pos.succ t.(counter) |} in
+    ok (t', SPvar t.(counter))
+  | Papp1 op e =>
+    Let: (t', sp) := spexpr_of_pexpr t e in
+    ok (t', SPapp1 op sp)
+  | Papp2 op e1 e2 =>
+    Let: (t', sp1) := spexpr_of_pexpr t e1 in
+    Let: (t'', sp2) := spexpr_of_pexpr t' e2 in
+    ok (t'', SPapp2 op sp1 sp2)
+  | PappN op es =>
+    Let: (t', sps) := fmapM spexpr_of_pexpr t es in
+    ok (t', SPappN op sps)
+  | Pif ty b e1 e2 =>
+    Let: (t', sp) := spexpr_of_pexpr t b in
+    Let: (t'', sp1) := spexpr_of_pexpr t' e1 in
+    Let: (t''', sp2) := spexpr_of_pexpr t'' e2 in
+    ok (t''', SPif ty sp sp1 sp2)
+  end.
+
+(* TODO SYMBOLIC: try not to update t, or only locally; in one word, do not return t,
+  this should also work
+*)
+Fixpoint alloc_e t (e:pexpr) := 
   match e with
-  | Pconst _ | Pbool _ | Parr_init _ => ok e
+  | Pconst _ | Pbool _ | Parr_init _ => ok (t, e)
   | Pvar   x =>
     let xv := x.(gv) in
     Let vk := get_var_kind x in
     match vk with
-    | None => Let _ := check_diff xv in ok e
+    | None => Let _ := check_diff xv in ok (t, e)
     | Some vpk => 
       if is_word_type (vtype xv) is Some ws then
-        Let _ := check_vpk_word rmap xv vpk (Some (APconst 0)) ws in
-        Let pofs := mk_addr xv AAdirect ws vpk (Pconst 0) in (* ws or U8 is the same, is this needed? *)
-        ok (Pload ws pofs.1 pofs.2)
+        Let _ := check_vpk_word rmap xv vpk (SPconst 0) ws in
+        (* FIXME SYMBOLIC: ws or U8 is the same, ws is really needed? *)
+        Let pofs := mk_addr xv AAdirect ws vpk (Pconst 0) in
+        ok (t, Pload ws pofs.1 pofs.2)
       else Error (stk_ierror_basic xv "not a word variable in expression")
     end
 
   | Pget aa ws x e1 =>
     let xv := x.(gv) in
-    Let e1 := alloc_e e1 in
+    Let: (t, e1) := alloc_e t e1 in
     Let vk := get_var_kind x in
     match vk with
-    | None => Let _ := check_diff xv in ok (Pget aa ws x e1)
+    | None => Let _ := check_diff xv in ok (t, Pget aa ws x e1)
     | Some vpk =>
-    (* hack: we should use pofs.2 turned into apexpr *)
-      let ofs :=
-        match mk_ofsi aa ws e1 with
-        | Some ofs => Some (APconst ofs)
-        | None => None
-        end
-      in
-      Let pofs := mk_addr xv aa ws vpk e1 in
+      Let: (t, ofs) := spexpr_of_pexpr t (mk_ofs aa ws e1 0) in
       Let _ := check_vpk_word rmap xv vpk ofs ws in
-      ok (Pload ws pofs.1 pofs.2)
+      Let pofs := mk_addr xv aa ws vpk e1 in
+      ok (t, Pload ws pofs.1 pofs.2)
     end
 
   | Psub aa ws len x e1 =>
@@ -878,36 +909,36 @@ Fixpoint alloc_e (e:pexpr) :=
   | Pload ws x e1 =>
     Let _ := check_var x in
     Let _ := check_diff x in
-    Let e1 := alloc_e e1 in
-    ok (Pload ws x e1)
+    Let: (t, e1) := alloc_e t e1 in
+    ok (t, Pload ws x e1)
 
   | Papp1 o e1 =>
-    Let e1 := alloc_e e1 in
-    ok (Papp1 o e1)
+    Let: (t, e1) := alloc_e t e1 in
+    ok (t, Papp1 o e1)
 
   | Papp2 o e1 e2 =>
-    Let e1 := alloc_e e1 in
-    Let e2 := alloc_e e2 in
-    ok (Papp2 o e1 e2)
+    Let: (t, e1) := alloc_e t e1 in
+    Let: (t, e2) := alloc_e t e2 in
+    ok (t, Papp2 o e1 e2)
 
   | PappN o es => 
-    Let es := mapM alloc_e es in
-    ok (PappN o es)
+    Let: (t, es) := fmapM alloc_e t es in
+    ok (t, PappN o es)
 
-  | Pif t e e1 e2 =>
-    Let e := alloc_e e in
-    Let e1 := alloc_e e1 in
-    Let e2 := alloc_e e2 in
-    ok (Pif t e e1 e2)
+  | Pif ty e e1 e2 =>
+    Let: (t, e) := alloc_e t e in
+    Let: (t, e1) := alloc_e t e1 in
+    Let: (t, e2) := alloc_e t e2 in
+    ok (t, Pif ty e e1 e2)
   end.
 
-  Definition alloc_es := mapM alloc_e.
+  Definition alloc_es := fmapM alloc_e.
 
 End ALLOC_E.
 
-Definition sub_region_direct x align sc z :=
+Definition sub_region_direct x align sc cs :=
   let r := {| r_slot := x; r_align := align; r_writable := sc != Sglob |} in
-  let z := [:: {| az_ofs := APconst z.(z_ofs); az_len := APconst z.(z_len) |}] in
+  let z := [:: {| ss_ofs := SPconst cs.(cs_ofs); ss_len := SPconst cs.(cs_len) |}] in
   {| sr_region := r; sr_zone := z |}.
 
 Definition sub_region_stack x align z :=
@@ -919,43 +950,38 @@ Definition sub_region_pk x pk :=
   | _ => Error (stk_ierror x (pp_box [:: pp_var x; pp_s "is not in the stack"]))
   end.
 
-Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
-  match r with
-  | Lnone _ _ => ok (rmap, r)
+Definition alloc_lval (trmap: table * region_map) (r:lval) (ty:stype) :=
+  let (t, rmap) := trmap in
+  match r return cexec (table * region_map * _) with
+  | Lnone _ _ => ok (t, rmap, r)
 
   | Lvar x =>
     (* TODO: could we remove this [check_diff] and use an invariant in the proof instead? *)
     match get_local x with
-    | None => Let _ := check_diff x in ok (rmap, r)
+    | None => Let _ := check_diff x in ok (t, rmap, r)
     | Some pk => 
       if is_word_type (vtype x) is Some ws then 
-        if subtype (sword ws) ty then 
+        if subtype (sword ws) ty then
           Let pofs := mk_addr_ptr x AAdirect ws pk (Pconst 0) in
           Let sr   := sub_region_pk x pk in
           let r := Lmem ws pofs.1 pofs.2 in
           Let rmap := Region.set_word rmap x sr ws in
-          ok (rmap, r)
+          ok (t, rmap, r)
         else Error (stk_ierror_basic x "invalid type for assignment")
       else Error (stk_ierror_basic x "not a word variable in assignment")
     end
 
   | Laset aa ws x e1 =>
     (* TODO: could we remove this [check_diff] and use an invariant in the proof instead? *)
-    Let e1 := alloc_e rmap e1 in
+    Let: (t, e1) := alloc_e rmap t e1 in
     match get_local x with
-    | None => Let _ := check_diff x in ok (rmap, Laset aa ws x e1)
-    | Some pk =>
-    (* hack: we should use pofs.2 turned into apexpr *)
-      let ofs :=
-        match mk_ofsi aa ws e1 with
-        | Some ofs => Some (APconst ofs)
-        | None => None
-        end
-      in
-      Let rmap := set_arr_word rmap x ofs ws in (* FIXME STACK : what instead of 0 ? *)
+    | None => Let _ := check_diff x in ok (t, rmap, Laset aa ws x e1)
+    | Some pk => 
+      Let: (t, ofs) := spexpr_of_pexpr t (mk_ofs aa ws e1 0) in
+      Let rmap := set_arr_word rmap x ofs ws in
       Let pofs := mk_addr_ptr x aa ws pk e1 in
       let r := Lmem ws pofs.1 pofs.2 in
-      ok (rmap, r)
+      ok (t, rmap, r)
     end
 
   | Lasub aa ws len x e1 =>
@@ -964,8 +990,8 @@ Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
   | Lmem ws x e1 =>
     Let _ := check_var x in
     Let _ := check_diff x in
-    Let e1 := alloc_e rmap e1 in
-    ok (rmap, Lmem ws x e1)
+    Let: (t, e1) := alloc_e rmap t e1 in
+    ok (t, rmap, Lmem ws x e1)
   end.
 
 Definition nop := Copn [::] AT_none sopn_nop [::].
@@ -986,101 +1012,21 @@ Definition get_addr is_spilling rmap x dx tag sry vpk y ofs :=
   let rmap := Region.set_move rmap x sry in
   (rmap, ir).
 
-Record table := {
-  bindings : Mvar.t abstract_pexpr;
-  counter : positive;
-}.
-
-Definition binding_var t (x:var_i) :=
-  match Mvar.get t.(bindings) x with
-  | Some ap => ok ap
-  | None => Error (stk_ierror_basic x "uninitialized variable")
-  end.
-
-(* FIXME: not sure we need to be as precise since lowering is before stack_alloc,
-   a lot of pexpr have already been turned into asm_op *)
-Fixpoint apexpr_of_pexpr t p : cexec (table * abstract_pexpr) :=
-  match p with
-  | Pconst z => ok (t, APconst z)
-  | Pbool b => ok (t, APbool b)
-  | Pvar x => Let ap := binding_var t x.(gv) in ok (t, ap)
-  | Pget aa ws x p =>
-    Let: (t', ap) := apexpr_of_pexpr t p in
-    Let x' := binding_var t' x.(gv) in (*
-    match x' with
-    | APvar x' => ok (t', APget aa ws x' ap)
-    | _ => Error (stk_ierror_basic x.(gv) "not associated a variable")
-    end *)
-    ok (t', APget aa ws x' ap)
-  | Psub aa ws len x e =>
-    Let: (t', ap) := apexpr_of_pexpr t e in
-    Let x' := binding_var t' x.(gv) in (*
-    match x' with
-    | APvar x' => ok (t', APsub aa ws len x' ap)
-    | _ => Error (stk_ierror_basic x.(gv) "not associated a variable")
-    end *)
-    ok (t', APsub aa ws len x' ap)
-  | Parr_init _ | Pload _ _ _ =>
-    let t' := {| bindings := t.(bindings); counter := Pos.succ t.(counter) |} in
-    ok (t', APvar t.(counter))
-  | Papp1 op e =>
-    Let: (t', ap) := apexpr_of_pexpr t e in
-    ok (t', APapp1 op ap)
-  | Papp2 op e1 e2 =>
-    Let: (t', ap1) := apexpr_of_pexpr t e1 in
-    Let: (t'', ap2) := apexpr_of_pexpr t' e2 in
-    ok (t'', APapp2 op ap1 ap2)
-  | PappN op es =>
-    Let: (t', aps) := fmapM apexpr_of_pexpr t es in
-    ok (t', APappN op aps)
-  | Pif ty b e1 e2 =>
-    Let: (t', ap) := apexpr_of_pexpr t b in
-    Let: (t'', ap1) := apexpr_of_pexpr t' e1 in
-    Let: (t''', ap2) := apexpr_of_pexpr t'' e2 in
-    ok (t''', APif ty ap ap1 ap2)
-  end.
-(*
-Definition get_ofs_sub t aa ws e1 := 
-  Let ap := apexpr_of_pexpr t e1 in
-  ok (APapp2 (Omul Op_int) ap (APconst (mk_scale aa ws))).
-
-Definition get_Lvar_sub t lv := 
-  match lv with
-  | Lvar x => ok (x, None)
-  | Lasub aa ws len x e1 =>
-    Let ofs := get_ofs_sub t aa ws e1 in
-    ok (x, Some (ofs, APapp2 (Omul Op_int) (APconst ws) (APconst len)))
-  | _      => Error (stk_ierror_no_var "get_Lvar_sub: variable/subarray expected")
-  end.
-
-Definition get_Pvar_sub t e := 
-  match e with
-  | Pvar x => ok (x, None)
-  | Psub aa ws len x e1 =>
-    Let ofs := get_ofs_sub t aa ws e1 in
-    ok (x, Some (ofs, arr_size ws len))
-  | _      => Error (stk_ierror_no_var "get_Pvar_sub: variable/subarray expected")
-  end.
-*)
 Definition is_stack_ptr vpk :=
   match vpk with
   | VKptr (Pstkptr s ofs ws z f) => Some (s, ofs, ws, z, f)
   | _ => None
   end.
 
-Definition az_of_z z :=
-  [:: {| az_ofs := APconst z.(z_ofs); az_len := APconst z.(z_len) |}].
-
 (* Not so elegant: function [addr_from_vpk] can fail, but it
    actually fails only on the [Pstkptr] case, that is treated apart.
    Thus function [mk_addr_pexpr] never fails, but this is not checked statically.
 *)
 Definition mk_addr_pexpr rmap x vpk :=
-  if is_stack_ptr vpk is Some (s, ofs, ws, z, f) then
-    let az := az_of_z z in
-    Let _   := assert (check_stack_ptr rmap s ws az f)
+  if is_stack_ptr vpk is Some (s, ofs, ws, cs, f) then
+    Let _   := assert (check_stack_ptr rmap s ws cs f)
                       (stk_error x (pp_box [:: pp_s "the stack pointer"; pp_var x; pp_s "is no longer valid"])) in
-    ok (Pload Uptr (with_var x pmap.(vrsp)) (cast_const (ofs + z.(z_ofs))), 0%Z)
+    ok (Pload Uptr (with_var x pmap.(vrsp)) (cast_const (ofs + cs.(cs_ofs))), 0%Z)
   else
     Let xofs := addr_from_vpk x vpk in
     ok (Plvar xofs.1, xofs.2).
@@ -1088,8 +1034,6 @@ Definition mk_addr_pexpr rmap x vpk :=
 Definition mk_addr_pexpr' rmap x aa ws vpk e1 :=
   Let xofs := mk_addr_pexpr rmap x vpk in
   ok (xofs.1, mk_ofs aa ws e1 xofs.2).
-
-Section test.
 
 (* TODO: the check [is_lvar] was removed, was it really on purpose? *)
 (* TODO : currently, we check that the source array is valid and set the target
@@ -1099,7 +1043,7 @@ Section test.
    of y...
 *)
 (* Precondition is_sarr ty *)
-Definition alloc_array_move t (rmap:region_map) r tag e :=
+Definition alloc_array_move t rmap r tag e :=
 
   Let sryl :=
     match e with
@@ -1109,22 +1053,22 @@ Definition alloc_array_move t (rmap:region_map) r tag e :=
       match vk with
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
-        Let sry := check_vpk rmap yv vpk (Some (APconst 0)) (APconst (size_slot yv)) in
+        Let srs := check_vpk rmap yv vpk (SPconst 0) (SPconst (size_slot yv)) in
+        let sry := srs.2 in
         Let: (e1, e2) := mk_addr_pexpr' rmap yv AAdirect U8 vpk (Pconst 0) in
         ok (t, sry, vpk, e1, e2)
       end
-
     | Psub aa ws len y e1 =>
       let yv := y.(gv) in
       Let vk := get_var_kind y in
       match vk with
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
-        Let: (e1', e2') := mk_addr_pexpr' rmap yv aa ws vpk e1 in
-        Let: (t', e) := apexpr_of_pexpr t (mk_ofs aa ws e1 0) in
-        Let sry := check_vpk rmap yv vpk (Some e) (APconst (arr_size ws len)) in
-        let sry' := sub_region_at_ofs sry e (APconst (arr_size ws len)) in
-        ok (t', sry', vpk, e1', e2')
+        Let: (t, e) := spexpr_of_pexpr t (mk_ofs aa ws e1 0) in
+        Let srs := check_vpk rmap yv vpk e (SPconst (arr_size ws len)) in
+        let sry := srs.2 in
+        Let: (e1, e2) := mk_addr_pexpr' rmap yv aa ws vpk e1 in
+        ok (t, sry, vpk, e1, e2)
       end
 
     | _      => Error (stk_ierror_no_var "get_Pvar_sub: variable/subarray expected")
@@ -1145,11 +1089,7 @@ Definition alloc_array_move t (rmap:region_map) r tag e :=
                  (stk_ierror x
                     (pp_box [::
                       pp_s "the assignment to array"; pp_var x;
-                      pp_s "cannot be turned into a nop: source (";
-                      pp_s (string_of_sr sry);
-                      pp_s ") and destination (";
-                      pp_s (string_of_sr sr);
-                      pp_s ") regions are not equal"]))
+                      pp_s "cannot be turned into a nop: source and destination regions are not equal"]))
         in
         let rmap := Region.set_move rmap x sry in
         ok (t, rmap, nop)
@@ -1163,10 +1103,9 @@ Definition alloc_array_move t (rmap:region_map) r tag e :=
         | Some ir =>
           ok (t, rmap, ir)
         end
-      | Pstkptr slot ofsx ws z x' =>
-        let az := az_of_z z in
-        let is_spilling := Some (slot, ws, az, x') in
-        let dx_ofs := cast_const (ofsx + z.(z_ofs)) in
+      | Pstkptr slot ofsx ws cs x' =>
+        let is_spilling := Some (slot, ws, cs, x') in
+        let dx_ofs := cast_const (ofsx + cs.(cs_ofs)) in
         let dx := Lmem Uptr (with_var x pmap.(vrsp)) dx_ofs in
         let (rmap, oir) := get_addr is_spilling rmap x dx tag sry vpk ey ofs in
         match oir with
@@ -1174,7 +1113,7 @@ Definition alloc_array_move t (rmap:region_map) r tag e :=
           let err_pp := pp_box [:: pp_s "cannot compute address"; pp_var x] in
           Error (stk_error x err_pp)
         | Some ir =>
-          ok (t, Region.set_stack_ptr rmap slot ws az x', ir)
+          ok (t, Region.set_stack_ptr rmap slot ws cs x', ir)
         end
       end
     end
@@ -1183,9 +1122,8 @@ Definition alloc_array_move t (rmap:region_map) r tag e :=
     match get_local (v_var x) with
     | None   => Error (stk_ierror_basic x "register array remains")
     | Some _ =>
-      let ofs := mk_ofs aa ws e 0 in
-      Let: (t, ofs) := apexpr_of_pexpr t ofs in
-      Let rmap := Region.set_arr_sub string_of_sr rmap x ofs (APconst (arr_size ws len)) sry in
+      Let: (t, ofs) := spexpr_of_pexpr t (mk_ofs aa ws e 0) in
+      Let rmap := Region.set_arr_sub rmap x ofs (SPconst (arr_size ws len)) sry in
       ok (t, rmap, nop)
     end
 
@@ -1214,7 +1152,8 @@ Definition alloc_protect_ptr (t:table) rmap ii r (tag:assgn_tag) e msf :=
       | Some vpk =>
         Let _ := assert (if vpk is VKptr (Pregptr _) then true else false)
                         (stk_error_no_var "argument of protect_ptr should be a reg ptr") in
-        Let sry := check_vpk rmap vy vpk (Some (APconst 0)) (APconst (size_slot vy)) in
+        Let srs := check_vpk rmap vy vpk (SPconst 0) (SPconst (size_slot vy)) in
+        let sry := srs.2 in
         Let: (e, _ofs) := mk_addr_pexpr rmap vy vpk in (* ofs is ensured to be 0 *)
         ok (sry, vpk, e)
       end
@@ -1230,10 +1169,10 @@ Definition alloc_protect_ptr (t:table) rmap ii r (tag:assgn_tag) e msf :=
       match pk with
       | Pregptr px =>
         let dx := Lvar (with_var x px) in
-        Let msf := add_iinfo ii (alloc_e rmap msf) in
+        Let: (t, msf) := add_iinfo ii (alloc_e rmap t msf) in
         Let ir := lower_protect_ptr_fail ii [::dx] tag [:: ey; msf] in
         let rmap := Region.set_move rmap x sry in
-        ok (rmap, ir)
+        ok (t, rmap, ir)
       | _ => Error (stk_error_no_var "only reg ptr can receive the result of protect_ptr")
       end
     end
@@ -1251,7 +1190,7 @@ Definition is_array_init e :=
 (* We do not update the [var_region] part *)
 (* there seems to be an invariant: all Pdirect are in the rmap *)
 (* long-term TODO: we can avoid putting PDirect in the rmap (look in pmap instead) *)
-Definition alloc_array_move_init t rmap (r:lval) tag e :=
+Definition alloc_array_move_init t rmap r tag e :=
   if is_array_init e then
     match r with
     | Lvar x =>
@@ -1268,7 +1207,8 @@ Definition alloc_array_move_init t rmap (r:lval) tag e :=
           | _ => 
             get_sub_region rmap x
           end
-        end in
+        end
+      in
       let rmap := Region.set_move_sub rmap x sr in
       ok (t, rmap, nop)
     | _ => Error (stk_ierror_no_var "arrayinit of non-variable")
@@ -1327,13 +1267,13 @@ Definition get_Pvar e :=
    but there are probably better ideas.
    TODO: factorize [set_clear_bytes] and [set_pure_bytes] ?
 *)
-Definition set_clear_status (rmap:region_map) sr ofs len :=
+Definition set_clear_status rv sr ofs len :=
   let z     := sr.(sr_zone) in
   let z1    := sub_zone_at_ofs z ofs len in
-  let sm    := get_status_map sr.(sr_region) rmap in
+  let sm    := get_status_map sr.(sr_region) rv in
   (* clear all bytes corresponding to z1 *)
-  let sm := clear_status_map rmap z1 sm in
-  Mr.set rmap sr.(sr_region) sm.
+  let sm := clear_status_map z1 sm in
+  Mr.set rv sr.(sr_region) sm.
 
 Definition set_clear_pure rmap sr ofs len :=
   {| var_region := rmap.(var_region);
@@ -1375,8 +1315,9 @@ Definition alloc_call_arg_aux rmap0 rmap (sao_param: option param_info) (e:pexpr
     ok (rmap, (None, Pvar x))
   | None, Some _ => Error (stk_ierror_basic xv "argument not a reg")
   | Some pi, Some (Pregptr p) => 
-    Let sr := Region.check_valid string_of_borrowed string_of_sr rmap0 xv (Some (APconst 0)) (APconst (size_slot xv)) in
-    Let rmap := if pi.(pp_writable) then set_clear rmap xv sr (APconst 0%Z) (APconst (size_slot xv)) else ok rmap in
+    Let srs := Region.check_valid rmap0 xv (SPconst 0) (SPconst (size_slot xv)) in
+    let sr := srs.1 in
+    Let rmap := if pi.(pp_writable) then set_clear rmap xv sr (SPconst 0) (SPconst (size_slot xv)) else ok rmap in
     Let _  := check_align xv sr pi.(pp_align) in
     ok (rmap, (Some (pi.(pp_writable),sr), Pvar (mk_lvar (with_var xv p))))
   | Some _, _ => Error (stk_ierror_basic xv "the argument should be a reg ptr")
@@ -1386,8 +1327,8 @@ Definition alloc_call_args_aux rmap sao_params es :=
   fmapM2 (stk_ierror_no_var "bad params info") (alloc_call_arg_aux rmap) rmap sao_params es.
 
 Definition disj_sub_regions sr1 sr2 :=
-  ~~(region_same sr1.(sr_region) sr2.(sr_region)).
-(*  disjoint_zones sr1.(sr_zone) sr2.(sr_zone). *) (* we cannot be precise with abstract zones *)
+  ~~(region_same sr1.(sr_region) sr2.(sr_region)) || 
+  disjoint_zones sr1.(sr_zone) sr2.(sr_zone).
 
 Fixpoint check_all_disj (notwritables writables:seq sub_region) (srs:seq (option (bool * sub_region) * pexpr)) := 
   match srs with
@@ -1481,17 +1422,27 @@ Definition alloc_call (sao_caller:stk_alloc_oracle_t) rmap ini rs fn es :=
   let es  := map snd es in
   ok (rs.1, Ccall ini rs.2 fn es).
 
+Definition merge_table (t1 t2 : table) :=
+  {| bindings :=
+       Mvar.map2 (fun _ osp1 osp2 =>
+         match osp1, osp2 with
+         | Some sp1, Some sp2 => if sp1 == sp2 then osp1 else None
+         | _, _ => None
+         end) t1.(bindings) t2.(bindings);
+     counter := Pos.max t1.(counter) t2.(counter)
+  |}.
+
 Definition lval_table tab r e :=
   match r with
   | Lvar x =>
-    Let: (tab, ap) := apexpr_of_pexpr tab e in
+    Let: (tab, ap) := spexpr_of_pexpr tab e in
     ok ({|
       bindings := Mvar.set tab.(bindings) x ap;
       counter := tab.(counter)
     |})
   | Laset _ _ x _ | Lasub _ _ _ x _ =>
     ok ({|
-      bindings := Mvar.set tab.(bindings) x (APvar tab.(counter));
+      bindings := Mvar.set tab.(bindings) x (SPvar tab.(counter));
       counter := Pos.succ tab.(counter)
     |})
   | _ => ok tab
@@ -1500,7 +1451,7 @@ Definition lval_table tab r e :=
 Definition lval_table_fresh tab r :=
   match r with
   | Lvar x | Laset _ _ x _ => {|
-      bindings := Mvar.set tab.(bindings) x (APvar tab.(counter));
+      bindings := Mvar.set tab.(bindings) x (SPvar tab.(counter));
       counter := Pos.succ tab.(counter)
     |}
   | _ => tab
@@ -1530,7 +1481,8 @@ Definition alloc_syscall ii t rmap rs o es :=
       Let p  := get_regptr xe in
       Let xp := get_regptr x in
       Let sr := get_sub_region rmap xe in
-      Let rmap := set_sub_region rmap x sr true (Some (APconst 0)) (APconst (Zpos len)) in
+      let sr := sub_region_at_ofs sr (SPconst 0) (SPconst (Zpos len)) in
+      Let rmap := set_sub_region rmap x sr in
       let t := lval_table_fresh t x in
       ok (t, rmap,
           [:: MkI ii (sap_immediate saparams xlen (Zpos len));
@@ -1540,116 +1492,77 @@ Definition alloc_syscall ii t rmap rs o es :=
     end
   end.
 
-(* TODO *)
-Definition merge_table (tab1 tab2 : table) := tab1.
-
-(* after a WHILE, we don't know anything about the variables assigned in the body *)
-Definition clean_table_i tab (i:instr) :=
-  let (_, i) := i in
-  match i with
-  | Cassgn r _ _ _ =>
-    match r with
-    | Lvar x =>
-      match Mvar.get tab.(bindings) x with
-      | Some _ =>
-        {| bindings := Mvar.set tab.(bindings) x (APvar tab.(counter));
-           counter := Pos.succ tab.(counter)
-        |}
-      | None => tab
-      end
-    | _ => tab
-    end
-  | _ => tab
-  end.
-
-Definition clean_table tab (c:cmd) :=
-  foldl clean_table_i tab c.
-
+(* To gain precision, we have a special case when an assembly instruction is just
+   a move. *)
 Context (is_move_op : asm_op_t -> bool).
 
-Fixpoint alloc_i sao print_rmap (tab_rmap:table * region_map) (i: instr) : cexec (table * region_map * cmd) :=
-  let (tab, rmap) := tab_rmap in
+Fixpoint alloc_i sao (trmap:table * region_map) (i: instr) : cexec (table * region_map * cmd) :=
+  let (t, rmap) := trmap in
   let (ii, ir) := i in
-
   Let c :=
-    match ir return cexec (table * region_map * cmd) with
-    | Cassgn r t ty e =>
+    match ir with
+    | Cassgn r tag ty e => 
       if is_sarr ty then
-        Let: (tab, rmap, i) := add_iinfo ii (alloc_array_move_init tab rmap r t e) in
-        Let tab := lval_table tab r e in
-        ok (tab, rmap, [:: MkI ii ir])
+        Let: (t, rmap, i) := add_iinfo ii (alloc_array_move_init t rmap r tag e) in
+        Let t := lval_table t r e in
+        ok (t, rmap, [:: MkI ii i])
       else
-        Let e' := add_iinfo ii (alloc_e rmap e) in
-        Let r' := add_iinfo ii (alloc_lval rmap r ty) in
-        Let tab := lval_table tab r e in
-        ok (tab, r'.1, [:: MkI ii (Cassgn r'.2 t ty e')])
+        Let: (t, e') := add_iinfo ii (alloc_e rmap t e) in
+        Let: (t, rmap, r') := add_iinfo ii (alloc_lval (t, rmap) r ty) in
+        Let t := lval_table t r e in
+        ok (t, rmap, [:: MkI ii (Cassgn r' tag ty e')])
 
-    | Copn rs t o e =>
+    | Copn rs tag o e => 
       if is_protect_ptr_fail rs o e is Some (r, e, msf) then
-         Let rs := alloc_protect_ptr tab rmap ii r t e msf in
-         ok (tab, rs.1, [:: MkI ii rs.2])
+         Let: (t, rs1, rs2) := alloc_protect_ptr t rmap ii r tag e msf in
+         ok (t, rs1, [:: MkI ii rs2])
       else
-      Let e'  := add_iinfo ii (alloc_es rmap e) in
-      Let rs' := add_iinfo ii (alloc_lvals rmap rs (sopn_tout o)) in
-      Let tab :=
+      Let: (t, e')  := add_iinfo ii (alloc_es rmap t e) in
+      Let: (t, rmap, rs') := add_iinfo ii (alloc_lvals (t, rmap) rs (sopn_tout o)) in
+      Let t :=
         match rs, o, e with
         | [:: x], Oasm op, [:: e] =>
           if is_move_op op then
-            lval_table tab x e
+            lval_table t x e
           else
-            ok (foldl (fun acc r => lval_table_fresh acc r) tab rs)
+            ok (foldl lval_table_fresh t rs)
         | _, _, _ =>
-          ok (foldl (fun acc r => lval_table_fresh acc r) tab rs)
+          ok (foldl lval_table_fresh t rs)
         end
       in
-      ok (tab, rs'.1, [:: MkI ii (Copn rs'.2 t o e')])
+      ok (t, rmap, [:: MkI ii (Copn rs' tag o e')])
 
     | Csyscall rs o es =>
-      alloc_syscall ii tab rmap rs o es
+      alloc_syscall ii t rmap rs o es
 
     | Cif e c1 c2 => 
-      Let e := add_iinfo ii (alloc_e rmap e) in
-      Let c1 := fmapM (alloc_i sao print_rmap) (tab, rmap) c1 in
-      Let c2 := fmapM (alloc_i sao print_rmap) (tab, rmap) c2 in
-      let c1' : table * region_map := c1.1 in
-      let (tab1, rmap1) := c1.1 in
-      let c2' : table * region_map := c2.1 in
-      let (tab2, rmap2) := c2' in
-      let tab := merge_table tab1 tab2 in
+      Let: (t,  e) := add_iinfo ii (alloc_e rmap t e) in
+      Let: (t1, rmap1, c1) := fmapM (alloc_i sao) (t, rmap) c1 in
+      Let: (t2, rmap2, c2) := fmapM (alloc_i sao) (t, rmap) c2 in
+      let t := merge_table t1 t2 in
       let rmap := merge rmap1 rmap2 in
-      ok (tab, rmap, [:: MkI ii (Cif e (flatten c1.2) (flatten c2.2))])
+      ok (t, rmap, [:: MkI ii (Cif e (flatten c1) (flatten c2))])
 
     | Cwhile a c1 e c2 => 
-      let check_c rmap := 
-        Let c1 := fmapM (alloc_i sao print_rmap) (tab, rmap) c1 in
-        let c1' : table * region_map := c1.1 in
-        let '(tab1, rmap1) := c1' in
-        Let e := add_iinfo ii (alloc_e rmap1 e) in
-        Let c2 := fmapM (alloc_i sao print_rmap) (tab1, rmap1) c2 in
-        ok ((rmap1, c2.1.2), (e, (c1.2, c2.2))) in
+      let check_c (rmap : region_map) :=
+        Let: (t1, rmap1, c1) := fmapM (alloc_i sao) (t, rmap) c1 in
+        Let: (t', e) := add_iinfo ii (alloc_e rmap1 t1 e) in
+        Let: (t2, rmap2, c2) := fmapM (alloc_i sao) (t', rmap1) c2 in
+        ok (rmap1, rmap2, (e, (c1, c2))) in
       Let r := loop2 ii check_c Loop.nb rmap in
-      ok (clean_table (clean_table tab c1) c2, r.1, [:: MkI ii (Cwhile a (flatten r.2.2.1) r.2.1 (flatten r.2.2.2))])
+      ok (t, r.1, [:: MkI ii (Cwhile a (flatten r.2.2.1) r.2.1 (flatten r.2.2.2))])
 
     | Ccall ini rs fn es =>
       Let: (rmap, i) := add_iinfo ii (alloc_call sao rmap ini rs fn es) in
-      let tab := foldl lval_table_fresh tab rs in
-      ok (tab, rmap, [:: MkI ii i])
+      let t := foldl lval_table_fresh t rs in
+      ok (t, rmap, [::MkI ii i])
 
     | Cfor _ _ _  => Error (pp_at_ii ii (stk_ierror_no_var "don't deal with for loop"))
 
-    end
-  in
-  ok (print_rmap ii c.1, c.2).
-
-Definition alloc_i' sao print_rmap (tab_rmap:table*region_map) (i: instr) : cexec (table * region_map * cmd) :=
-  alloc_i sao print_rmap tab_rmap i. (*
-  Let: (tab_rmap, c) := alloc_i sao tab_rmap i in
-  let 'MkI ii _ := i in
-  ok (print_rmap ii tab_rmap, c). *)
+    end in
+  ok c.
 
 End PROG.
-
-End test.
 
 End Section.
 
@@ -1687,24 +1600,24 @@ Definition add_alloc globals stack (xpk:var * ptr_kind_init) (lrx: Mvar.t ptr_ki
   else
     Let svrmap := 
       match pk with
-      | PIdirect x' z sc =>
+      | PIdirect x' cs sc =>
         let vars := if sc is Slocal then stack else globals in
         match Mvar.get vars x' with
         | None => Error (stk_ierror_no_var "unknown region")
         | Some (ofs', ws') =>
-          if [&& (size_slot x <= z.(z_len))%CMP, (0%Z <= z.(z_ofs))%CMP &
-                 ((z.(z_ofs) + z.(z_len))%Z <= size_slot x')%CMP] then
+          if [&& (size_slot x <= cs.(cs_len))%CMP, (0%Z <= cs.(cs_ofs))%CMP &
+                 ((cs.(cs_ofs) + cs.(cs_len))%Z <= size_slot x')%CMP] then
             let rmap :=
               if sc is Slocal then
-                let sr := sub_region_stack x' ws' z in
+                let sr := sub_region_stack x' ws' cs in
                 Region.set_arr_init rmap x sr
               else
                 rmap
             in
-            ok (sv, Pdirect x' ofs' ws' z sc, rmap)
+            ok (sv, Pdirect x' ofs' ws' cs sc, rmap)
           else Error (stk_ierror_no_var "invalid slot")
         end
-      | PIstkptr x' z xp =>
+      | PIstkptr x' cs xp =>
         if ~~ is_sarr x.(vtype) then
           Error (stk_ierror_no_var "a stk ptr variable must be an array")
         else
@@ -1716,11 +1629,11 @@ Definition add_alloc globals stack (xpk:var * ptr_kind_init) (lrx: Mvar.t ptr_ki
           else if Mvar.get locals xp is Some _ then Error (stk_ierror_no_var "a pseudo-var is equal to a program var")
           else
             if [&& (Uptr <= ws')%CMP,
-                (0%Z <= z.(z_ofs))%CMP,
-                (Z.land z.(z_ofs) (wsize_size Uptr - 1) == 0)%Z,
-                (wsize_size Uptr <= z.(z_len))%CMP &
-                ((z.(z_ofs) + z.(z_len))%Z <= size_slot x')%CMP] then
-              ok (Sv.add xp sv, Pstkptr x' ofs' ws' z xp, rmap)
+                (0%Z <= cs.(cs_ofs))%CMP,
+                (Z.land cs.(cs_ofs) (wsize_size Uptr - 1) == 0)%Z,
+                (wsize_size Uptr <= cs.(cs_len))%CMP &
+                ((cs.(cs_ofs) + cs.(cs_len))%Z <= size_slot x')%CMP] then
+              ok (Sv.add xp sv, Pstkptr x' ofs' ws' cs xp, rmap)
           else Error (stk_ierror_no_var "invalid ptr kind")
         end
       | PIregptr p => 
@@ -1770,7 +1683,8 @@ Definition check_result pmap rmap paramsi params oi (x:var_i) :=
     | Some sr =>
       Let _ := assert (x.(vtype) == (nth x params i).(vtype))
                       (stk_ierror_no_var "reg ptr in result not corresponding to a parameter") in
-      Let sr' := check_valid string_of_borrowed string_of_sr rmap x (Some (APconst 0)) (APconst (size_slot x)) in
+      Let srs := check_valid rmap x (SPconst 0) (SPconst (size_slot x)) in
+      let sr' := srs.1 in
       Let _  := assert (sr == sr') (stk_ierror_no_var "invalid reg ptr in result") in
       Let p  := get_regptr pmap x in
       ok p
@@ -1799,49 +1713,45 @@ Definition check_results pmap rmap paramsi params ret_pos res :=
 
 (* TODO: is duplicate region the best error msg ? *)
 Definition init_param (mglob stack : Mvar.t (Z * wsize)) accu pi (x:var_i) := 
-  let: (disj, lmap, tab, rmap) := accu in
+  let: (disj, lmap, t, rmap) := accu in
   Let _ := assert (~~ Sv.mem x disj) (stk_ierror_no_var "a parameter already exists") in
   if Mvar.get lmap x is Some _ then Error (stk_ierror_no_var "a stack variable also occurs as a parameter")
   else
-  match pi with
-  | None =>
-    let tab := {|
-      bindings := Mvar.set tab.(bindings) x (APvar tab.(counter));
-      counter := Pos.succ tab.(counter)
+    let t := {|
+      bindings := Mvar.set t.(bindings) x (SPvar t.(counter));
+      counter := Pos.succ t.(counter)
     |} in
-    ok ((disj, lmap, tab, rmap), (None, x))
-  | Some pi => 
-    Let _ := assert (vtype pi.(pp_ptr) == sword Uptr) (stk_ierror_no_var "bad ptr type") in
-    Let _ := assert (~~Sv.mem pi.(pp_ptr) disj) (stk_ierror_no_var "duplicate region") in
-    Let _ := assert (is_sarr x.(vtype)) (stk_ierror_no_var "bad reg ptr type") in
-    if Mvar.get lmap pi.(pp_ptr) is Some _ then Error (stk_ierror_no_var "a pointer is equal to a local var")
-    else if Mvar.get mglob x is Some _ then Error (stk_ierror_no_var "a region is both glob and param")
-    else if Mvar.get stack x is Some _ then Error (stk_ierror_no_var "a region is both stack and param")
-    else
-    let r :=
-      {| r_slot := x;
-         r_align := pi.(pp_align); r_writable := pi.(pp_writable) |} in
-    let sr := sub_region_full x r in
-    ok (Sv.add pi.(pp_ptr) disj,
-        Mvar.set lmap x (Pregptr pi.(pp_ptr)),
-        {|
-      bindings := Mvar.set tab.(bindings) x (APvar tab.(counter));
-      counter := Pos.succ tab.(counter)
-    |},
-        set_move rmap x sr,
-        (Some sr, with_var x pi.(pp_ptr)))
-  end.
+    match pi with
+    | None => ok (disj, lmap, t, rmap, (None, x))
+    | Some pi => 
+      Let _ := assert (vtype pi.(pp_ptr) == sword Uptr) (stk_ierror_no_var "bad ptr type") in
+      Let _ := assert (~~Sv.mem pi.(pp_ptr) disj) (stk_ierror_no_var "duplicate region") in
+      Let _ := assert (is_sarr x.(vtype)) (stk_ierror_no_var "bad reg ptr type") in
+      if Mvar.get lmap pi.(pp_ptr) is Some _ then Error (stk_ierror_no_var "a pointer is equal to a local var")
+      else if Mvar.get mglob x is Some _ then Error (stk_ierror_no_var "a region is both glob and param")
+      else if Mvar.get stack x is Some _ then Error (stk_ierror_no_var "a region is both stack and param")
+      else
+      let r :=
+        {| r_slot := x;
+           r_align := pi.(pp_align); r_writable := pi.(pp_writable) |} in
+      let sr := sub_region_full x r in
+      ok (Sv.add pi.(pp_ptr) disj,
+          Mvar.set lmap x (Pregptr pi.(pp_ptr)),
+          t,
+          set_move rmap x sr,
+          (Some sr, with_var x pi.(pp_ptr)))
+    end.
 
-Definition init_params mglob stack disj lmap tab rmap sao_params params :=
+Definition init_params mglob stack disj lmap t rmap sao_params params :=
   fmapM2 (stk_ierror_no_var "invalid function info")
-    (init_param mglob stack) (disj, lmap, tab, rmap) sao_params params.
+    (init_param mglob stack) (disj, lmap, t, rmap) sao_params params.
 
-Definition table_global tab (mglob:Mvar.t (Z*wsize)) :=
-  Mvar.fold (fun x _ tab =>
-    {| bindings := Mvar.set tab.(bindings) x (APvar tab.(counter));
-       counter := Pos.succ tab.(counter) |}) mglob tab.
+Definition table_global t (mglob:Mvar.t (Z*wsize)) :=
+  Mvar.fold (fun x _ t =>
+    {| bindings := Mvar.set t.(bindings) x (SPvar t.(counter));
+       counter := Pos.succ t.(counter) |}) mglob t.
 
-Definition alloc_fd_aux p_extra mglob (fresh_reg : Ident.name -> stype -> Ident.ident) (local_alloc: funname -> stk_alloc_oracle_t) sao print_rmap fd : cexec _ufundef :=
+Definition alloc_fd_aux p_extra mglob (fresh_reg : Ident.name -> stype -> Ident.ident) (local_alloc: funname -> stk_alloc_oracle_t) sao fd : cexec _ufundef :=
   let vrip := {| vtype := sword Uptr; vname := p_extra.(sp_rip) |} in
   let vrsp := {| vtype := sword Uptr; vname := p_extra.(sp_rsp) |} in
   let vxlen := {| vtype := sword Uptr; vname := fresh_reg (Ident.name_of_string "__len__") (sword Uptr) |} in
@@ -1850,11 +1760,11 @@ Definition alloc_fd_aux p_extra mglob (fresh_reg : Ident.name -> stype -> Ident.
   Let mstk := init_local_map vrip vrsp vxlen mglob stack sao in
   let '(locals, rmap, disj) := mstk in
   (* hacky : we do it for each function... we could do it once and pass it around *)
-  let tab := table_global {| bindings := Mvar.empty _; counter := 1 |} mglob in
+  let t := table_global {| bindings := Mvar.empty _; counter := 1 |} mglob in
   (* adding params to the map *)
   Let rparams :=
-    init_params mglob stack disj locals tab rmap sao.(sao_params) fd.(f_params) in
-  let: (sv, lmap, tab, rmap, alloc_params) := rparams in
+    init_params mglob stack disj locals t rmap sao.(sao_params) fd.(f_params) in
+  let: (sv, lmap, t, rmap, alloc_params) := rparams in
   let paramsi := map fst alloc_params in
   let params : seq var_i := map snd alloc_params in
   let pmap := {|
@@ -1878,8 +1788,8 @@ Definition alloc_fd_aux p_extra mglob (fresh_reg : Ident.name -> stype -> Ident.
     assert_check (local_size <=? sao.(sao_max_size))%Z
                  (stk_ierror_no_var "sao_max_size too small")
   in
-  Let rbody := fmapM (alloc_i' pmap local_alloc is_move_op sao print_rmap) (tab, rmap) fd.(f_body) in
-  let: (tab, rmap, body) := rbody in
+  Let rbody := fmapM (alloc_i pmap local_alloc is_move_op sao) (t, rmap) fd.(f_body) in
+  let: (t, rmap, body) := rbody in
   Let res :=
       check_results pmap rmap paramsi fd.(f_params) sao.(sao_return) fd.(f_res) in
   ok {|
@@ -1891,9 +1801,9 @@ Definition alloc_fd_aux p_extra mglob (fresh_reg : Ident.name -> stype -> Ident.
     f_res := res;
     f_extra := f_extra fd |}.
 
-Definition alloc_fd p_extra mglob (fresh_reg : Ident.name -> stype -> Ident.ident) (local_alloc: funname -> stk_alloc_oracle_t) print_rmap fn fd :=
+Definition alloc_fd p_extra mglob (fresh_reg : Ident.name -> stype -> Ident.ident) (local_alloc: funname -> stk_alloc_oracle_t) fn fd :=
   let: sao := local_alloc fn in
-  Let fd := alloc_fd_aux p_extra mglob fresh_reg local_alloc sao print_rmap fd in
+  Let fd := alloc_fd_aux p_extra mglob fresh_reg local_alloc sao fd in
   let f_extra := {|
         sf_align  := sao.(sao_align);
         sf_stk_sz := sao.(sao_size);
@@ -1984,7 +1894,7 @@ Definition init_map (l:list (var * wsize * Z)) data (gd:glob_decls) : cexec (Mva
   ok mvar.
 
 Definition alloc_prog (fresh_reg : Ident.name -> stype -> Ident.ident)
-    rip rsp global_data global_alloc local_alloc print_rmap (P:_uprog) : cexec _sprog :=
+    rip rsp global_data global_alloc local_alloc (P:_uprog) : cexec _sprog :=
   Let mglob := init_map global_alloc global_data P.(p_globs) in
   let p_extra :=  {|
     sp_rip   := rip;
@@ -1992,7 +1902,7 @@ Definition alloc_prog (fresh_reg : Ident.name -> stype -> Ident.ident)
     sp_globs := global_data;
   |} in
   Let _ := assert (rip != rsp) (stk_ierror_no_var "rip and rsp clash") in
-  Let p_funs := map_cfprog_name (alloc_fd p_extra mglob fresh_reg local_alloc print_rmap) P.(p_funcs) in
+  Let p_funs := map_cfprog_name (alloc_fd p_extra mglob fresh_reg local_alloc) P.(p_funcs) in
   ok  {| p_funcs  := p_funs;
          p_globs := [::];
          p_extra := p_extra;
