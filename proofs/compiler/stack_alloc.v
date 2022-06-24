@@ -317,6 +317,7 @@ Definition get_var_status rv r x :=
   let bytes := get_status x bm in
   bytes.
 
+(*
 (* FIXME SYMBOLIC: this is completely ad-hoc. Could we reuse something standard
    from sem and/or constant_prop? *)
 (* -> use blocks from constant prop !! *)
@@ -338,6 +339,293 @@ Fixpoint is_spexpr_const sp :=
       end
     | _, _ => None
     end
+  | _ => None
+  end.
+*)
+
+Module ConstProp.
+Definition e2bool (e:spexpr) : exec bool := 
+  match e with
+  | SPbool b => ok b
+  | _       => type_error
+  end.
+
+Definition e2int (e:spexpr) : exec Z := 
+  match e with
+  | SPconst z => ok z
+  | _        => type_error
+  end.
+
+Definition is_const sp :=
+  match sp with
+  | SPconst n => Some n
+  | _ => None
+  end.
+
+Definition wconst (sz: wsize) (n: word sz) : spexpr :=
+  SPapp1 (Oword_of_int sz) (SPconst (wunsigned n)).
+
+Definition is_wconst (sz: wsize) (e: spexpr) : option (word sz) :=
+  match e with
+  | SPapp1 (Oword_of_int sz') e =>
+    if (sz <= sz')%CMP then
+      obind (fun n => Some (zero_extend sz (wrepr sz' n))) (is_const e)
+    else None
+  | _       => None
+  end%O.
+
+Definition is_wconst_of_size sz (e: pexpr) : option Z :=
+  match e with
+  | Papp1 (Oword_of_int sz') (Pconst z) =>
+    if sz' == sz then Some z else None
+  | _ => None
+  end.
+
+Definition e2word (sz:wsize) (e:spexpr) : exec (word sz) := 
+  match is_wconst sz e with
+  | Some w => ok w
+  | None   => type_error
+  end.
+ 
+Definition of_expr (t:stype) : spexpr -> exec (sem_t t) :=
+  match t return spexpr -> exec (sem_t t) with
+  | sbool   => e2bool
+  | sint    => e2int
+  | sarr n  => fun _ => type_error 
+  | sword sz => e2word sz
+  end.
+
+Definition to_expr (t:stype) : sem_t t -> exec spexpr := 
+  match t return sem_t t -> exec spexpr with
+  | sbool => fun b => ok (SPbool b)
+  | sint  => fun z => ok (SPconst z)
+  | sarr _ => fun _ => type_error
+  | sword sz => fun w => ok (wconst w)
+  end.
+
+Definition ssem_sop1 (o: sop1) (e: spexpr) : spexpr := 
+  let r := 
+    Let x := of_expr _ e in
+    to_expr (sem_op_typed.sem_sop1_typed o x) in
+  match r with 
+  | Ok e => e
+  | _ => SPapp1 o e
+  end.
+
+Definition ssem_sop2 (o: sop2) (e1 e2: spexpr) : spexpr := 
+  let r := 
+    Let x1 := of_expr _ e1 in
+    Let x2 := of_expr _ e2 in
+    Let v  := sem_op_typed.sem_sop2_typed o x1 x2 in
+    to_expr v in 
+  match r with 
+  | Ok e => e
+  | _ => SPapp2 o e1 e2
+  end.
+
+Definition sadd_int e1 e2 :=
+  match is_const e1, is_const e2 with
+  | Some n1, Some n2 => SPconst (n1 + n2)
+  | Some n, _ =>
+    if (n == 0)%Z then e2 else SPapp2 (Oadd Op_int) e1 e2
+  | _, Some n =>
+    if (n == 0)%Z then e1 else SPapp2 (Oadd Op_int) e1 e2
+  | _, _ => SPapp2 (Oadd Op_int) e1 e2
+  end.
+
+Definition sadd_w sz e1 e2 :=
+  match is_wconst sz e1, is_wconst sz e2 with
+  | Some n1, Some n2 => wconst (n1 + n2)
+  | Some n, _ => if n == 0%R then e2 else SPapp2 (Oadd (Op_w sz)) e1 e2
+  | _, Some n => if n == 0%R then e1 else SPapp2 (Oadd (Op_w sz)) e1 e2
+  | _, _ => SPapp2 (Oadd (Op_w sz)) e1 e2
+  end.
+
+Definition sadd ty :=
+  match ty with
+  | Op_int => sadd_int
+  | Op_w sz => sadd_w sz
+  end.
+
+Definition ssub_int e1 e2 :=
+  match is_const e1, is_const e2 with
+  | Some n1, Some n2 => SPconst (n1 - n2)
+  | _, Some n =>
+    if (n == 0)%Z then e1 else SPapp2 (Osub Op_int) e1 e2
+  | _, _ => SPapp2 (Osub Op_int) e1 e2
+  end.
+
+Definition ssub_w sz e1 e2 :=
+  match is_wconst sz e1, is_wconst sz e2 with
+  | Some n1, Some n2 => wconst (n1 - n2)
+  | _, Some n => if n == 0%R then e1 else SPapp2 (Osub (Op_w sz)) e1 e2
+  | _, _ => SPapp2 (Osub (Op_w sz)) e1 e2
+  end.
+
+Definition ssub ty :=
+  match ty with
+  | Op_int => ssub_int
+  | Op_w sz => ssub_w sz
+  end.
+
+Definition smul_int e1 e2 :=
+  match is_const e1, is_const e2 with
+  | Some n1, Some n2 => SPconst (n1 * n2)
+  | Some n, _ =>
+    if (n == 0)%Z then SPconst 0
+    else if (n == 1)%Z then e2
+    else SPapp2 (Omul Op_int) e1 e2
+  | _, Some n =>
+    if (n == 0)%Z then SPconst 0
+    else if (n == 1)%Z then e1
+    else SPapp2 (Omul Op_int) e1 e2
+  | _, _ => SPapp2 (Omul Op_int) e1 e2
+  end.
+
+Definition smul_w sz e1 e2 :=
+  match is_wconst sz e1, is_wconst sz e2 with
+  | Some n1, Some n2 => wconst (n1 * n2)
+  | Some n, _ =>
+    if n == 0%R then @wconst sz 0
+    else if n == 1%R then e2
+    else SPapp2 (Omul (Op_w sz)) (wconst n) e2
+  | _, Some n =>
+    if n == 0%R then @wconst sz 0
+    else if n == 1%R then e1
+    else SPapp2 (Omul (Op_w sz)) e1 (wconst n)
+  | _, _ => SPapp2 (Omul (Op_w sz)) e1 e2
+  end.
+
+Definition smul ty :=
+  match ty with
+  | Op_int => smul_int
+  | Op_w sz => smul_w sz
+  end.
+
+Definition s_op2 o e1 e2 :=
+  match o with
+  | Oadd ty => sadd ty e1 e2
+  | Osub ty => ssub ty e1 e2
+  | Omul ty => smul ty e1 e2
+  | _       => ssem_sop2 o e1 e2
+  end.
+
+Definition app_sopn := app_sopn of_expr.
+
+Arguments app_sopn {A} ts _ _.
+
+Section bla.
+
+Context {fcp : flag_combination.FlagCombinationParams}.
+
+Definition s_opN (op:opN) (es:seq spexpr) : spexpr :=
+  match app_sopn _ (sem_op_typed.sem_opN_typed op) es with
+  | Ok r =>
+    match op return sem_t (type_of_opN op).2 -> _ with
+    | Opack ws _ => fun w => SPapp1 (Oword_of_int ws) (SPconst (wunsigned w))
+    | Ocombine_flags _ => fun b => SPbool b
+    end r
+  | _ => SPappN op es
+  end.
+
+Definition is_bool e :=
+  match e with
+ | SPbool b => Some b
+ | _ => None
+ end.
+
+Definition s_if t e e1 e2 :=
+  match is_bool e with
+  | Some b => if b then e1 else e2
+  | None   => SPif t e e1 e2
+  end.
+
+(* ** constant propagation
+ * -------------------------------------------------------------------- *)
+
+Variant const_v :=
+  | Cbool of bool
+  | Cint of Z
+  | Cword sz `(word sz).
+
+Definition const_v_beq (c1 c2: const_v) : bool :=
+  match c1, c2 with
+  | Cbool b1, Cbool b2 => b1 == b2
+  | Cint z1, Cint z2 => z1 == z2
+  | Cword sz1 w1, Cword sz2 w2 =>
+    match wsize_eq_dec sz1 sz2 with
+    | left e => eq_rect _ word w1 _ e == w2
+    | _ => false
+    end
+  | _, _ => false
+  end.
+
+Lemma const_v_eq_axiom : Equality.axiom const_v_beq.
+Proof.
+case => [ b1 | z1 | sz1 w1 ] [ b2 | z2 | sz2 w2] /=; try (constructor; congruence).
++ case: eqP => [ -> | ne ]; constructor; congruence.
++ case: eqP => [ -> | ne ]; constructor; congruence.
+case: wsize_eq_dec => [ ? | ne ]; last (constructor; congruence).
+subst => /=.
+by apply:(iffP idP) => [ /eqP | [] ] ->.
+Qed.
+
+Definition const_v_eqMixin     := Equality.Mixin const_v_eq_axiom.
+Canonical  const_v_eqType      := Eval hnf in EqType const_v const_v_eqMixin.
+
+Local Notation cpm := (Mvar.t const_v).
+
+Definition const v :=
+  match v with
+  | Cbool b => SPbool b
+  | Cint z  => SPconst z
+  | Cword sz z => wconst z
+  end.
+
+Fixpoint snot (e:spexpr) :=
+  match e with
+  | SPbool b      => SPbool (~~b)
+  | SPapp1 Onot e => e
+  | SPapp2 Oand e1 e2 => SPapp2 Oor (snot e1) (snot e2)
+  | SPapp2 Oor  e1 e2 => SPapp2 Oand (snot e1) (snot e2)
+  | SPif t e e1 e2 => SPif t e (snot e1) (snot e2)
+  | _             => SPapp1 Onot e
+  end.
+
+Definition sneg_int (e: spexpr) :=
+  match e with
+  | SPconst z => SPconst (- z)
+  | SPapp1 (Oneg Op_int) e' => e'
+  | _ => SPapp1 (Oneg Op_int) e
+  end.
+Definition s_op1 o e :=
+  match o with
+  | Onot        => snot e
+  | Oneg Op_int => sneg_int e
+  | _           => ssem_sop1 o e
+  end.
+
+
+Fixpoint const_prop_e e :=
+  match e with
+  | SPconst _
+  | SPbool  _
+    => e
+  | SPvar  x       => e
+  | SPget aa sz x e => SPget aa sz x (const_prop_e e)
+  | SPsub aa sz len x e => SPsub aa sz len x (const_prop_e e)
+  | SPapp1 o e     => s_op1 o (const_prop_e e)
+  | SPapp2 o e1 e2 => s_op2 o (const_prop_e e1)  (const_prop_e e2)
+  | SPappN op es   => s_opN op (map (const_prop_e) es)
+  | SPif t e e1 e2 => s_if t (const_prop_e e) (const_prop_e e1) (const_prop_e e2)
+  end.
+
+End bla.
+
+End ConstProp.
+Definition is_spexpr_const sp :=
+  match sp with
+  | SPconst n => Some n
   | _ => None
   end.
 
@@ -363,12 +651,14 @@ Definition sub_zone_at_ofs z ofs len :=
   match split_last z with
   | None => [:: {| ss_ofs := ofs; ss_len := len |}]
   | Some (z', s) =>
-    if z' == [::] then
-    match is_spexpr_const s.(ss_ofs), is_spexpr_const s.(ss_len), is_spexpr_const ofs, is_spexpr_const len with
-    | Some ofs1, Some len1, Some ofs2, Some len2 => z' ++ [:: {| ss_ofs := SPconst (ofs1 + ofs2); ss_len := SPconst len2 |}]
-    | _, _, _, _ => z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
+    match is_spexpr_const s.(ss_len), is_spexpr_const ofs, is_spexpr_const len with
+    | Some len1, Some ofs2, Some len2 => (* if (ofs2 == 0) && (len1 == len2) then z else *)
+    match is_spexpr_const s.(ss_ofs) with
+    | Some ofs1 => z' ++ [:: {| ss_ofs := SPconst (ofs1 + ofs2); ss_len := SPconst len2 |}]
+    | _ => z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
     end
-    else z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
+    | _, _, _ => z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
+    end
   end.
 
 Definition sub_region_at_ofs sr ofs len :=
@@ -542,20 +832,20 @@ Definition set_stack_ptr (rmap:region_map) s ws cs (x':var) :=
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
-Definition is_valid status :=
-  match status with
-  | Valid => true
-  | _ => false
-  end.
-
 (* TODO: fusion with check_valid ? *)
 (* FIXME SYMBOLIC: the comment of "let z :=" seems strange *)
 Definition check_stack_ptr rmap s ws z x' :=
   let sr := sub_region_stkptr s ws z in
-(*   let z := sub_zone_at_ofs z (SPconst 0) (SPconst (wsize_size Uptr)) in *)
   let status := get_var_status rmap sr.(sr_region) x' in
-  is_valid status.
-(* TODO: remettre check_valid z *)
+  let sr' := sub_region_at_ofs sr (SPconst 0) (SPconst (wsize_size Uptr)) in
+  let valid :=
+    match status with
+    | Valid => true
+    | Unknown => false
+    | Borrowed z => all (disjoint_zones sr'.(sr_zone)) z
+    end
+  in
+  valid.
 
 End WITH_POINTER_DATA.
 
@@ -693,6 +983,12 @@ Definition mk_ofs aa ws e1 ofs :=
     cast_const (i * sz + ofs)%Z
   else 
     add (mul (cast_const sz) (cast_ptr e1)) (cast_const ofs).
+
+Definition is_sp_const sp := match sp with | SPconst n => Some n | _ => None end.
+Definition mk_ofs_sp aa ws e1 :=
+  let sz := mk_scale aa ws in
+  if is_sp_const e1 is Some i then SPconst (i * sz)
+  else SPapp2 (Oadd Op_int) (SPconst sz) e1.
 
 Section CHECK.
 
@@ -927,7 +1223,8 @@ Fixpoint alloc_e t (e:pexpr) :=
     match vk with
     | None => Let _ := check_diff xv in ok (t, Pget aa ws x e1)
     | Some vpk =>
-      Let: (t, ofs) := spexpr_of_pexpr t (mk_ofs aa ws e1 0) in
+      Let: (t, e1') := spexpr_of_pexpr t e1 in
+      let ofs := (mk_ofs_sp aa ws e1') in
       Let _ := check_vpk_word rmap xv vpk ofs ws in
       Let pofs := mk_addr xv aa ws vpk e1 in
       ok (t, Pload ws pofs.1 pofs.2)
@@ -1007,7 +1304,8 @@ Definition alloc_lval (trmap: table * region_map) (r:lval) (ty:stype) :=
     match get_local x with
     | None => Let _ := check_diff x in ok (t, rmap, Laset aa ws x e1)
     | Some pk => 
-      Let: (t, ofs) := spexpr_of_pexpr t (mk_ofs aa ws e1 0) in
+      Let: (t, e1') := spexpr_of_pexpr t e1 in
+      let ofs := (mk_ofs_sp aa ws e1') in
       Let rmap := set_arr_word rmap x ofs ws in
       Let pofs := mk_addr_ptr x aa ws pk e1 in
       let r := Lmem ws pofs.1 pofs.2 in
@@ -1084,7 +1382,7 @@ Definition alloc_array_move t rmap r tag e :=
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
         Let srs := check_vpk rmap yv vpk (SPconst 0) (SPconst (size_slot yv)) in
-        let sry := srs.2 in
+        let sry := srs.1 in
         Let: (e1, e2) := mk_addr_pexpr' rmap yv AAdirect U8 vpk (Pconst 0) in
         ok (t, sry, vpk, e1, e2)
       end
@@ -1094,8 +1392,9 @@ Definition alloc_array_move t rmap r tag e :=
       match vk with
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
-        Let: (t, e) := spexpr_of_pexpr t (mk_ofs aa ws e1 0) in
-        Let srs := check_vpk rmap yv vpk e (SPconst (arr_size ws len)) in
+        Let: (t, e) := spexpr_of_pexpr t e1 in
+        let ofs := (mk_ofs_sp aa ws e) in
+        Let srs := check_vpk rmap yv vpk ofs (SPconst (arr_size ws len)) in
         let sry := srs.2 in
         Let: (e1, e2) := mk_addr_pexpr' rmap yv aa ws vpk e1 in
         ok (t, sry, vpk, e1, e2)
@@ -1156,7 +1455,8 @@ Definition alloc_array_move t rmap r tag e :=
     match get_local (v_var x) with
     | None   => Error (stk_ierror_basic x "register array remains")
     | Some _ =>
-      Let: (t, ofs) := spexpr_of_pexpr t (mk_ofs aa ws e 0) in
+      Let: (t, e') := spexpr_of_pexpr t e in
+      let ofs := (mk_ofs_sp aa ws e') in
       Let rmap := Region.set_arr_sub string_of_sr rmap x ofs (SPconst (arr_size ws len)) sry in
       ok (t, rmap, nop)
     end
@@ -1459,6 +1759,20 @@ Definition alloc_call (sao_caller:stk_alloc_oracle_t) rmap ini rs fn es :=
 (* FIXME: juste utiliser un Mvar.fold *)
 Definition merge_table (t1 t2 : table) :=
   let p := Pos.max t1.(counter) t2.(counter) in
+  let (b, p) :=
+    Mvar.fold (fun v sp1 '(b, p) =>
+      match Mvar.get t2.(bindings) v with
+      | Some sp2 => if sp1 == sp2 then (Mvar.set b v sp1, p) else (Mvar.set b v (SPvar p), Pos.succ p)
+      | None => (Mvar.set b v (SPvar p), Pos.succ p)
+      end) t1.(bindings) (Mvar.empty _, p) in
+  let (b, p) :=
+    Mvar.fold (fun v sp2 '(b, p) =>
+      match Mvar.get b v with
+      | Some _ => (b, p)
+      | None => (Mvar.set b v (SPvar p), Pos.succ p)
+      end) t2.(bindings) (b, p)
+  in
+  {| bindings := b; counter := p |}. (*
   let b :=
     Mvar.map2 (fun _ osp1 osp2 =>
       match osp1, osp2 with
@@ -1473,7 +1787,7 @@ Definition merge_table (t1 t2 : table) :=
   in
   {| bindings := b;
      counter := p
-  |}.
+  |}. *)
 
 Definition lval_table tab r e :=
   match r with

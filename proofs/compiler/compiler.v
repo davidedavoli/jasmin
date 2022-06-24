@@ -158,8 +158,9 @@ Record compiler_params
   {asm_op : Type}
   {asmop : asmOp asm_op}
   (lowering_options : Type) := {
-  string_of_borrowed     : list stack_alloc.abstract_zone -> string;
-  string_of_sr     : stack_alloc.sub_region -> string;
+  string_of_sr     : sub_region -> string;
+  string_of_borrowed : seq symbolic_zone -> string;
+  print_trmap      : instr_info -> table * Region.region_map -> table * Region.region_map;
   rename_fd        : instr_info -> funname -> _ufundef -> _ufundef;
   expand_fd        : funname -> _ufundef -> expand_info;
   split_live_ranges_fd : funname -> _ufundef -> _ufundef;
@@ -180,7 +181,6 @@ Record compiler_params
   fresh_var_ident  : v_kind -> instr_info -> Ident.name -> stype -> Ident.ident;
   is_reg_array     : var -> bool;
   slh_info         : _uprog → funname → seq slh_t * seq slh_t;
-  print_rmap       : instr_info -> table * Region.region_map -> table * Region.region_map;
 }.
 
 Context
@@ -323,19 +323,19 @@ Definition compiler_front_end (entries: seq funname) (p: prog) : cexec sprog :=
   Let _ := check_no_ptr entries ao.(ao_stack_alloc) in
   Let ps :=
     stack_alloc.alloc_prog
-      cparams.(string_of_borrowed)
       cparams.(string_of_sr)
+      cparams.(string_of_borrowed)
       true
       shparams
       saparams
       (ap_is_move_op aparams)
+      cparams.(print_trmap)
       (fresh_var_ident cparams (Reg (Normal, Direct)) dummy_instr_info)
       (global_static_data_symbol cparams)
       (stack_register_symbol cparams)
       (ao_globals ao)
       (ao_global_alloc ao)
       (ao_stack_alloc ao)
-      (print_rmap cparams)
       pl
   in
   let ps : sprog := cparams.(print_sprog) StackAllocation ps in
