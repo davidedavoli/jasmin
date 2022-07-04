@@ -44,10 +44,12 @@ Definition lea_ptr x y tag ofs : instr_r :=
 
 (* FIXME:
    too ad-hoc: either we don't want Papp1 (Oword_of_int _) here (i.e. we don't introduce it in stack_alloc)
-   or we use constant_prop? *)
+   or we use constant_prop?
+   --> apparently, we need the case Papp1 (Oword_of_int _), and we don't need Pconst ???
+*)
 Definition is_zero e :=
   match e with
-  | Pconst 0 | Papp1 (Oword_of_int _) (Pconst 0) => true
+(*  | Pconst 0 *) | Papp1 (Oword_of_int ws) (Pconst 0) => ws == Uptr
   | _ => false
   end.
 

@@ -94,18 +94,23 @@ Context
 
 End STACK_ALLOC.
 
-Lemma arm_mov_ofsP {dc : DirectCall} (P': sprog) s1 e i x tag ofs w vpk s2 ins :
+Lemma arm_mov_ofsP {dc : DirectCall} (P': sprog) s1 e i x tag ofs w vpk s2 ins pofs :
   p_globs P' = [::]
   -> (Let i' := sem_pexpr true [::] s1 e in to_pointer i') = ok i
+  -> Let x := sem_pexpr true [::] s1 ofs in to_pointer x = ok pofs
   -> sap_mov_ofs arm_saparams x tag vpk e ofs = Some ins
-  -> write_lval true [::] x (Vword (i + wrepr Uptr ofs)) s1 = ok s2
+  -> write_lval true [::] x (Vword (i + pofs)) s1 = ok s2
   -> psem.sem_i (pT := progStack) P' w s1 ins s2.
 Proof.
   rewrite /sap_mov_ofs /= /arm_mov_ofs => P'_globs.
-  t_xrbindP => z ok_z ok_i.
+  t_xrbindP => z ok_z ok_i z_ofs ok_z_ofs ok_pofs.
   case: (mk_mov vpk) => /Some_inj <-{ins} hx.
   all: constructor.
-  all: by rewrite /sem_sopn /= P'_globs /exec_sopn /sem_sop2 /= ok_z /= ok_i /= truncate_word_u /= ?truncate_word_u /= hx.
+  + by rewrite /sem_sopn /= P'_globs /exec_sopn /sem_sop2 /=
+      ok_z /= ok_i /= ok_z_ofs /= ok_pofs /=
+      truncate_word_u /= hx.
+  by rewrite /sem_sopn /= P'_globs /exec_sopn /sem_sop2 /=
+    ok_z /= ok_z_ofs /= ok_i /= ok_pofs /= hx.
 Qed.
 
 Lemma arm_immediateP {dc : DirectCall} (P': sprog) w s (x: var_i) z :

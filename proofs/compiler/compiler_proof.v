@@ -283,8 +283,18 @@ Proof.
 Qed.
 
 (* TODO: move *)
+(* TODO: alloc_prog := alloc_prog true *)
 Remark sp_globs_stack_alloc rip rsp data ga la (p: uprog) (p': sprog) :
-  alloc_prog (ap_shp aparams) (ap_sap aparams) (fresh_var_ident cparams (Reg (Normal, Direct)) dummy_instr_info) rip rsp data ga la p = ok p' →
+  alloc_prog
+    cparams.(string_of_sr)
+    cparams.(string_of_borrowed)
+    true
+    (ap_shp aparams)
+    (ap_sap aparams)
+    aparams.(ap_is_move_op)
+    cparams.(print_trmap)
+    (fresh_var_ident cparams (Reg (Normal, Direct)) dummy_instr_info)
+    rip rsp data ga la p = ok p' →
   sp_globs (p_extra p') = data.
 Proof.
   by rewrite /alloc_prog; t_xrbindP => ???? _ <-.
