@@ -192,7 +192,7 @@ Class wf_pmap := {
   wf_locals  : forall x pk, Mvar.get pmap.(locals) x = Some pk -> wf_local x pk;
   wf_vnew    : forall x pk, Mvar.get pmap.(locals) x = Some pk -> ~ Sv.In x pmap.(vnew)
 }.
-(*
+
 (* Registers (not introduced by the compiler) hold the same value in [vm1] and [vm2] *)
 Definition eq_vm (vm1 vm2:Vm.t) :=
   forall (x:var),
@@ -208,24 +208,47 @@ Record wf_region (r : region) := {
 }.
 
 (* Well-formedness of a [zone]. *)
-Record wf_zone (z : zone) (ty : stype) (sl : slot) := {
-  wfz_len : size_of ty <= z.(z_len);
+Record wf_cs (cs : concrete_slice) (ty : stype) (sl : slot) := {
+  wfcs_len : size_of ty <= cs.(cs_len);
+    (* the zone is big enough to store a value of type [ty] *)
+  wfcs_ofs : 0 <= cs.(cs_ofs) /\ cs.(cs_ofs) + cs.(cs_len) <= size_slot sl
+    (* the zone is a small enough to be in slot [sl] *)
+}.
+
+Definition valuation := positive -> value.
+
+Fixpoint sem_spexpr (val : valuation) (sp : spexpr) :=
+  match sp with
+  | SPconst z => Vint z
+  | SPbool b => Vbool b
+  | SPvar v => ok (val v)
+  | SPget aa ws x p =>
+    sem_pexpr
+  | SPsub aa ws len x p =>
+  | SPapp1 op e => : sop1 → spexpr → spexpr sem_pexpr
+  | SPapp2 : sop2 → spexpr → spexpr → spexpr
+  | SPappN : opN → seq spexpr → spexpr
+  | SPif : stype → spexpr → spexpr → spexpr → spexpr.
+
+(* Well-formedness of a [zone]. *)
+Record wf_zone (s : symbolic_slice) (ty : stype) (sl : slot) := {
+  wfz_len : size_of ty <= s.(ss_len);
     (* the zone is big enough to store a value of type [ty] *)
   wfz_ofs : 0 <= z.(z_ofs) /\ z.(z_ofs) + z.(z_len) <= size_slot sl
     (* the zone is a small enough to be in slot [sl] *)
 }.
-
+*)
 (* Well-formedness of a [sub_region]. *)
-Record wf_sub_region (sr : sub_region) ty := {
+Record wf_sub_region (sr : sub_region) (ty:stype) := {
   wfsr_region :> wf_region sr.(sr_region);
-  wfsr_zone   :> wf_zone sr.(sr_zone) ty sr.(sr_region).(r_slot)
+(*   wfsr_zone   :> wf_zone sr.(sr_zone) ty sr.(sr_region).(r_slot) *)
 }.
 
 Definition wfr_WF (rmap : region_map) :=
   forall x sr,
     Mvar.get rmap.(var_region) x = Some sr ->
     wf_sub_region sr x.(vtype).
-*)
+
 (* TODO: should we raise another error in the Vword case ? Not really important *)
 (* This allows to read uniformly in words and arrays. *)
 Definition get_val_byte v off :=
@@ -237,10 +260,10 @@ Definition get_val_byte v off :=
 (*
 Definition sub_region_addr sr :=
   (Addr sr.(sr_region).(r_slot) + wrepr _ sr.(sr_zone).(z_ofs))%R.
-
-Definition eq_sub_region_val_read (m2:mem) sr bytes v :=
+*)
+Definition eq_sub_region_val_read (m2:mem) sr status v :=
   forall off,
-     ByteSet.memi bytes (sr.(sr_zone).(z_ofs) + off) ->
+     status = Valid ->
      forall w, get_val_byte v off = ok w ->
      read m2 (sub_region_addr sr + wrepr _ off)%R U8 = ok w.
 
