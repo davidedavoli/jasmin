@@ -165,6 +165,7 @@ let classes_alignment (onfun : funname -> param_info option list) (gtbl: alignme
       let i = 
         match get_ofs aa ws e with
         | None ->
+            (* FIXME: this is not triggered???? *)
           (* this error is probably always caught before by the similar code in alias.ml *)
           hierror ~loc:(Lone (L.loc x.gv)) "Cannot compile sub-array %a that has a non-constant start index" (Printer.pp_var ~debug:true) (L.unloc x.gv)
         | Some i -> i in

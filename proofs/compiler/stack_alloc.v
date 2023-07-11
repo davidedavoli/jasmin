@@ -119,10 +119,12 @@ Module Mr := Mmake CmpR.
    absence of constructors corresponding to [Parr_init] and [Pload], which are
    abstracted away.
 *)
+Definition svar := positive.
+
 Inductive spexpr : Set :=
 | SPconst : Z -> spexpr
 | SPbool : bool -> spexpr
-| SPvar : positive -> spexpr
+| SPvar : svar -> spexpr
 | SPget : arr_access -> wsize -> spexpr -> spexpr -> spexpr
 | SPsub : arr_access -> wsize -> positive -> spexpr -> spexpr -> spexpr
 | SPapp1 : sop1 -> spexpr -> spexpr
@@ -264,6 +266,7 @@ Definition check_align x (sr:sub_region) ws :=
   Let _ := assert (ws <= sr.(sr_region).(r_align))%CMP
                   (stk_ierror_basic x "unaligned offset") in
   (* FIXME SYMBOLIC: how to check the alignment ? *)
+  (* idea: use align/misaligned instructions, only use aligned ones when we are statically sure that it's ok *)
 (*  assert (Z.land sr.(sr_zone).(z_ofs) (wsize_size ws - 1) == 0)%Z
          (stk_ierror_basic x "unaligned sub offset"). *)
   ok tt.
@@ -1511,10 +1514,8 @@ Definition lval_table t r e :=
 
 Definition lval_table_fresh tab r :=
   match r with
-  | Lvar x | Laset _ _ x _ => {|
-      bindings := Mvar.set tab.(bindings) x (SPvar tab.(counter));
-      counter := Pos.succ tab.(counter)
-    |}
+  | Lvar x | Laset _ _ x _ =>
+    let (t, _) := table_fresh_var tab x in t
   | _ => tab
   end.
 
@@ -1782,10 +1783,7 @@ Definition init_param (mglob stack : Mvar.t (Z * wsize)) accu pi (x:var_i) :=
   Let _ := assert (~~ Sv.mem x disj) (stk_ierror_no_var "a parameter already exists") in
   if Mvar.get lmap x is Some _ then Error (stk_ierror_no_var "a stack variable also occurs as a parameter")
   else
-    let t := {|
-      bindings := Mvar.set t.(bindings) x (SPvar t.(counter));
-      counter := Pos.succ t.(counter)
-    |} in
+    let (t, _) := table_fresh_var t x in
     match pi with
     | None => ok (disj, lmap, t, rmap, (None, x))
     | Some pi => 
@@ -1812,9 +1810,7 @@ Definition init_params mglob stack disj lmap t rmap sao_params params :=
     (init_param mglob stack) (disj, lmap, t, rmap) sao_params params.
 
 Definition table_global t (mglob:Mvar.t (Z*wsize)) :=
-  Mvar.fold (fun x _ t =>
-    {| bindings := Mvar.set t.(bindings) x (SPvar t.(counter));
-       counter := Pos.succ t.(counter) |}) mglob t.
+  Mvar.fold (fun x _ t => let (t, _) := table_fresh_var t x in t) mglob t.
 
 Definition alloc_fd_aux print_trmap p_extra mglob (fresh_reg : Ident.name -> stype -> Ident.ident) (local_alloc: funname -> stk_alloc_oracle_t) sao fd : cexec _ufundef :=
   let vrip := {| vtype := sword Uptr; vname := p_extra.(sp_rip) |} in

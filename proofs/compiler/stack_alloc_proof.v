@@ -207,42 +207,181 @@ Record wf_region (r : region) := {
   wfr_align    : Align r.(r_slot) = r.(r_align);
 }.
 
-(* Well-formedness of a [zone]. *)
-Record wf_cs (cs : concrete_slice) (ty : stype) (sl : slot) := {
+(* Well-formedness of a [concrete_slice]. *)
+Record wf_concrete_slice (cs : concrete_slice) (ty : stype) (sl : slot) := {
   wfcs_len : size_of ty <= cs.(cs_len);
     (* the zone is big enough to store a value of type [ty] *)
   wfcs_ofs : 0 <= cs.(cs_ofs) /\ cs.(cs_ofs) + cs.(cs_len) <= size_slot sl
     (* the zone is a small enough to be in slot [sl] *)
 }.
 
-Definition valuation := positive -> value.
+Section VALUATION.
 
-Fixpoint sem_spexpr (val : valuation) (sp : spexpr) :=
+Definition valuation := svar -> value.
+
+Context (val : valuation).
+
+(* A bit ugly *)
+Notation "'Let' ( n , t ) ':=' '.[' v ']' 'in' body" :=
+  (@on_arr_var _ v (fun n (t:WArray.array n) => body)) (at level 25).
+
+Fixpoint sem_spexpr (sp : spexpr) :=
   match sp with
-  | SPconst z => Vint z
-  | SPbool b => Vbool b
+  | SPconst z => ok (Vint z)
+  | SPbool b => ok (Vbool b)
   | SPvar v => ok (val v)
-  | SPget aa ws x p =>
-    sem_pexpr
-  | SPsub aa ws len x p =>
-  | SPapp1 op e => : sop1 → spexpr → spexpr sem_pexpr
-  | SPapp2 : sop2 → spexpr → spexpr → spexpr
-  | SPappN : opN → seq spexpr → spexpr
-  | SPif : stype → spexpr → spexpr → spexpr → spexpr.
+  | SPget aa ws x e =>
+    let t := sem_spexpr x in
+    Let (n, t) := .[t] in
+    Let i := sem_spexpr e >>= to_int in
+    Let w := WArray.get aa ws t i in
+    ok (Vword w)
+  | SPsub aa ws len x e =>
+    let t := sem_spexpr x in
+    Let (n, t) := .[t] in
+    Let i := sem_spexpr e >>= to_int in
+    Let t' := WArray.get_sub aa ws len t i in
+    ok (Varr t')
+  | SPapp1 o e1 =>
+    Let v1 := sem_spexpr e1 in
+    sem_sop1 o v1
+  | SPapp2 o e1 e2 =>
+    Let v1 := sem_spexpr e1 in
+    Let v2 := sem_spexpr e2 in
+    sem_sop2 o v1 v2
+  | SPappN op es =>
+    Let vs := mapM sem_spexpr es in
+    sem_opN op vs
+  | SPif t e e1 e2 =>
+    Let b := sem_spexpr e >>= to_bool in
+    Let v1 := sem_spexpr e1 >>= truncate_val t in
+    Let v2 := sem_spexpr e2 >>= truncate_val t in
+    ok (if b then v1 else v2)
+  end.
 
-(* Well-formedness of a [zone]. *)
-Record wf_zone (s : symbolic_slice) (ty : stype) (sl : slot) := {
-  wfz_len : size_of ty <= s.(ss_len);
-    (* the zone is big enough to store a value of type [ty] *)
-  wfz_ofs : 0 <= z.(z_ofs) /\ z.(z_ofs) + z.(z_len) <= size_slot sl
-    (* the zone is a small enough to be in slot [sl] *)
+(* We interpret a symbolic_slice as a concrete_slice *)
+Definition sem_slice (s : symbolic_slice) : result error concrete_slice :=
+  Let ofs := sem_spexpr s.(ss_ofs) >>= to_int in
+  Let len := sem_spexpr s.(ss_len) >>= to_int in
+  ok {| cs_ofs := ofs; cs_len := len |}.
+
+(* We interpret a symbolic_zone also as a concrete_slice *)
+Fixpoint sem_zone_aux cs z :=
+  match z with
+  | [::] => ok cs
+  | s1 :: z =>
+    Let cs1 := sem_slice s1 in
+    let cs2 := {| cs_ofs := cs.(cs_ofs) + cs1.(cs_ofs); cs_len := cs1.(cs_len) |} in
+    sem_zone_aux cs2 z
+  end.
+
+Definition sem_zone z :=
+  match z with
+  | [::] => Error ErrOob (* random error, is there a better one? *)
+  | s :: z =>
+    Let cs := sem_slice s in
+    sem_zone_aux cs z
+  end.
+
+(* Well-formedness of a [symbolic_slice]: well-formedness of the corresponding [concrete_slice] *)
+Definition wf_symbolic_slice (s : symbolic_slice) (ty : stype) (sl : slot) :=
+  forall cs, sem_slice s = ok cs -> wf_concrete_slice cs ty sl.
+
+(* Interpretion of sub_region: this gives the old type of sub-regions *)
+Record concrete_sub_region := {
+  csr_region : region;
+  csr_slice  : concrete_slice;
 }.
-*)
+
+Definition sem_sub_region (sr:sub_region) : result error concrete_sub_region :=
+  Let cs := sem_zone sr.(sr_zone) in
+  ok {| csr_region := sr.(sr_region); csr_slice := cs |}.
+
+Definition zbetween_concrete_slice cs1 cs2 :=
+  (cs1.(cs_ofs) <=? cs2.(cs_ofs)) && (cs2.(cs_ofs) + cs2.(cs_len) <=? cs1.(cs_ofs) + cs1.(cs_len)).
+
+(* Well-formedness of a [symbolic_zone]. *)
+(* FIXME: we could define a wf predicate like in byteset.v ? *)
+Definition wf_symbolic_zone (z : symbolic_zone) (ty : stype) (sl : slot) :=
+  List.Forall (fun s => wf_symbolic_slice s ty sl) z /\
+  sorted (fun s1 s2 =>
+    match sem_slice s1, sem_slice s2 with
+    | ok _ cs1, ok _ cs2 =>
+    zbetween_concrete_slice cs1 cs2
+    | _, _ => false
+    end) z.
+
+Definition sub_slice_at_ofs cs ofs len :=
+  {| cs_ofs := cs.(cs_ofs) + ofs; cs_len := len |}.
+
+Fixpoint wf_symbolic_zone_aux cs z ty sl :=
+  match z with
+  | [::] => True
+  | s :: z =>
+    (forall cs', sem_slice s = ok cs' ->
+    zbetween_concrete_slice cs cs' /\
+    let cs'' := sub_slice_at_ofs cs cs'.(cs_ofs) cs'.(cs_len) in
+    wf_concrete_slice cs'' ty sl /\
+    wf_symbolic_zone_aux cs' z ty sl)
+  end.
+
+Definition wf_symbolic_zone' z ty sl :=
+  match z with
+  | [::] => False
+  | s :: z =>
+    forall cs, sem_slice s = ok cs -> wf_concrete_slice cs ty sl /\ wf_symbolic_zone_aux cs z ty sl
+  end.
+
 (* Well-formedness of a [sub_region]. *)
 Record wf_sub_region (sr : sub_region) (ty:stype) := {
   wfsr_region :> wf_region sr.(sr_region);
-(*   wfsr_zone   :> wf_zone sr.(sr_zone) ty sr.(sr_region).(r_slot) *)
+  wfsr_zone   :> wf_symbolic_zone' sr.(sr_zone) ty sr.(sr_region).(r_slot)
 }.
+
+Record wf_concrete_sub_region csr ty := {
+  wfcsr_region :> wf_region csr.(csr_region);
+  wfcsr_slice  :> wf_concrete_slice csr.(csr_slice) ty csr.(csr_region).(r_slot)
+}.
+
+Lemma sem_zone_wf z cs ty sl :
+  sem_zone z = ok cs ->
+  wf_symbolic_zone' z ty sl ->
+  wf_concrete_slice cs ty sl.
+Proof.
+  case: z => //= s z.
+  t_xrbindP=> cs0 hcs0 haux h.
+  move: hcs0 => /h{h} [].
+  elim: z cs0 cs haux => //=.
+  + move=> _ cs [->]. done.
+  move=> s' z ih.
+  t_xrbindP=> cs0 cs cs1 hcs1 hcs hwf0 hwfs'.
+  eapply ih.
+  + by apply hcs.
+  + move: hwf0.
+    move=> [h1 h2]. split=> //=.
+  apply hwfs' in hcs1. destruct hcs1 as (_ & H & _). apply H.
+  apply hwfs' in hcs1. destruct hcs1 as (h & hcs1 & _).
+  destruct hcs1.
+  move: h; rewrite /zbetween_concrete_slice !zify. simpl in wfcs_ofs0. lia.
+  apply hwfs' in hcs1. destruct hcs1 as (_ & _ & hcs1). (*
+  move=> ?. wf_symbolic_zone_aux
+  destruct hcs1.
+   s z ih. auto.
+  t_xrbindP=> cs cs1. wf_concrete_slice simpl. => cs.
+*)
+Abort.
+
+Lemma sem_sub_region_wf sr ty csr :
+  wf_sub_region sr ty ->
+  sem_sub_region sr = ok csr ->
+  wf_concrete_sub_region csr ty.
+Proof.
+  move=> [hwfr hwfz].
+  rewrite /sem_sub_region; t_xrbindP=> cs hcs <-; split=> //=. (*
+  wf_symbolic_zone
+  apply hwfz in hcs.
+  split=> //=. eauto. *)
+Abort.
 
 Definition wfr_WF (rmap : region_map) :=
   forall x sr,
@@ -257,15 +396,20 @@ Definition get_val_byte v off :=
   | Varr _ a => read a off U8
   |_ => type_error
   end.
+
+End VALUATION.
+
 (*
 Definition sub_region_addr sr :=
-  (Addr sr.(sr_region).(r_slot) + wrepr _ sr.(sr_zone).(z_ofs))%R.
-*)
+  Let cs := concrete_slice_of_zone sr.(sr_zone) in
+  ok (Addr sr.(sr_region).(r_slot) + wrepr _ cs.(cs_ofs))%R.
+
 Definition eq_sub_region_val_read (m2:mem) sr status v :=
   forall off,
      status = Valid ->
      forall w, get_val_byte v off = ok w ->
-     read m2 (sub_region_addr sr + wrepr _ off)%R U8 = ok w.
+     forall addr, sub_region_addr sr = ok addr ->
+     read m2 (addr + wrepr _ off)%R U8 = ok w.
 
 Definition eq_sub_region_val ty m2 sr bytes v :=
   eq_sub_region_val_read m2 sr bytes v /\
@@ -291,23 +435,23 @@ Notation gd := (p_globs P).
    pmap.(globals) and pmap.(locals)
    Could pmap.(globlals) and pmap.(locals) directly return sub_regions ?
 *)
-Definition check_gvalid rmap x : option (sub_region * ByteSet.t) :=
+Definition check_gvalid rmap x : option (sub_region * status) :=
   if is_glob x then 
     omap (fun '(_, ws) =>
       let sr := sub_region_glob x.(gv) ws in
-      let bytes := ByteSet.full (interval_of_zone sr.(sr_zone)) in
-      (sr, bytes)) (Mvar.get pmap.(globals) (gv x))
+      let status := Valid in
+      (sr, status)) (Mvar.get pmap.(globals) (gv x))
   else
     let sr := Mvar.get rmap.(var_region) x.(gv) in
     match sr with
     | Some sr =>
-      let bytes := get_var_bytes rmap.(region_var) sr.(sr_region) x.(gv) in
-      Some (sr, bytes)
+      let status := get_var_status rmap.(region_var) sr.(sr_region) x.(gv) in
+      Some (sr, status)
     | _ => None
     end.
 
 Definition wfr_VAL (rmap:region_map) (s1:estate) (s2:estate) :=
-  forall x sr bytes v, check_gvalid rmap x = Some (sr, bytes) -> 
+  forall x sr bytes v, check_gvalid rmap x = Some (sr, bytes) ->
     get_gvar true gd s1.(evm) x = ok v ->
     eq_sub_region_val x.(gv).(vtype) s2.(emem) sr bytes v.
 
@@ -317,9 +461,13 @@ Definition valid_pk rmap (s2:estate) sr pk :=
     sr = sub_region_direct s ws sc z
   | Pstkptr s ofs ws z f =>
     check_stack_ptr rmap s ws z f ->
-    read s2.(emem) (sub_region_addr (sub_region_stkptr s ws z)) Uptr = ok (sub_region_addr sr)
+    forall addr_stk addr,
+    sub_region_addr (sub_region_stkptr s ws z) = ok addr_stk ->
+    sub_region_addr sr = ok addr ->
+    read s2.(emem) addr_stk Uptr = ok addr
   | Pregptr p =>
-    s2.(evm).[p] = Vword (sub_region_addr sr)
+    forall addr, sub_region_addr sr = ok addr ->
+    s2.(evm).[p] = Vword (sub_region_addr sr).
   end.
 
 Definition wfr_PTR (rmap:region_map) (s2:estate) :=
@@ -392,13 +540,14 @@ Lemma sub_region_glob_wf x ofs ws :
 Proof.
   move=> [*]; split.
   + by split=> //; apply /idP.
-  by split=> /=; lia.
+  split=> //.
+  by constructor=> //= _ [<-]; split=> /=; lia.
 Qed.
 
-Lemma check_gvalid_wf rmap x sr_bytes :
+Lemma check_gvalid_wf rmap x sr_status :
   wfr_WF rmap ->
-  check_gvalid rmap x = Some sr_bytes ->
-  wf_sub_region sr_bytes.1 x.(gv).(vtype).
+  check_gvalid rmap x = Some sr_status ->
+  wf_sub_region sr_status.1 x.(gv).(vtype).
 Proof.
   move=> hwfr.
   rewrite /check_gvalid; case: (@idP (is_glob x)) => hg.
@@ -457,25 +606,26 @@ Qed.
 (* Predicates about zone: zbetween_zone, disjoint_zones *)
 (* -------------------------------------------------------------------------- *)
 
-Definition zbetween_zone z1 z2 :=
-  (z1.(z_ofs) <=? z2.(z_ofs)) && (z2.(z_ofs) + z2.(z_len) <=? z1.(z_ofs) + z1.(z_len)).
+(* Definition zbetween_zone z1 z2 :=
+  (z1.(z_ofs) <=? z2.(z_ofs)) && (z2.(z_ofs) + z2.(z_len) <=? z1.(z_ofs) + z1.(z_len)). *)
 
-Lemma zbetween_zone_refl z : zbetween_zone z z.
-Proof. by rewrite /zbetween_zone !zify; lia. Qed.
+Lemma zbetween_concrete_slice_refl cs : zbetween_concrete_slice cs cs.
+Proof. by rewrite /zbetween_concrete_slice !zify; lia. Qed.
 
-Lemma zbetween_zone_trans z1 z2 z3 :
-  zbetween_zone z1 z2 ->
-  zbetween_zone z2 z3 ->
-  zbetween_zone z1 z3.
-Proof. by rewrite /zbetween_zone !zify; lia. Qed.
-
+Lemma zbetween_concrete_slice_trans cs1 cs2 cs3 :
+  zbetween_concrete_slice cs1 cs2 ->
+  zbetween_concrete_slice cs2 cs3 ->
+  zbetween_concrete_slice cs1 cs3.
+Proof. by rewrite /zbetween_concrete_slice !zify; lia. Qed.
+(*
 (* On the model of [between_byte]. *)
-Lemma zbetween_zone_byte z1 z2 i :
-  zbetween_zone z1 z2 ->
+Lemma zbetween_concrete_slice_byte z1 z2 i :
+  zbetween_concrete_slice z1 z2 ->
   0 <= i /\ i < z2.(z_len) ->
-  zbetween_zone z1 (sub_zone_at_ofs z2 (Some i) (wsize_size U8)).
+  zbetween_concrete_slice z1 (sub_zone_at_ofs z2 (Some i) (wsize_size U8)).
 Proof. by rewrite /zbetween_zone wsize8 !zify /=; lia. Qed.
-
+*)
+(*
 Lemma subset_interval_of_zone z1 z2 :
   I.subset (interval_of_zone z1) (interval_of_zone z2) = zbetween_zone z2 z1.
 Proof.
@@ -494,10 +644,23 @@ Proof.
   move=> /ByteSet.memP; apply.
   by rewrite /interval_of_zone /I.memi /= wsize8 !zify; lia.
 Qed.
-
+*)
 Lemma disjoint_zones_sym z1 z2 : disjoint_zones z1 z2 = disjoint_zones z2 z1.
-Proof. by rewrite /disjoint_zones orbC. Qed.
-
+Proof.
+  elim: z1 z2 => [|s1 z1 ih] [|s2 z2] //=.
+  rewrite (eq_sym s2 s1).
+  case: eqP => // _.
+  case: (is_spexpr_const s1.(ss_ofs)) => [ofs1|]; last first.
+  + case: (is_spexpr_const s2.(ss_ofs)) => [ofs2|] => //.
+    by case: (is_spexpr_const s2.(ss_len)) => [len2|].
+  case: (is_spexpr_const s1.(ss_len)) => [len1|]; last first.
+  + case: (is_spexpr_const s2.(ss_ofs)) => [ofs2|] => //.
+    by case: (is_spexpr_const s2.(ss_len)) => [len2|].
+  case: (is_spexpr_const s2.(ss_ofs)) => [ofs2|] => //.
+  case: (is_spexpr_const s2.(ss_len)) => [len2|//].
+  by apply orbC.
+Qed.
+(*
 Lemma disjoint_zones_incl z1 z1' z2 z2' :
   zbetween_zone z1 z1' ->
   zbetween_zone z2 z2' ->
@@ -540,10 +703,10 @@ Qed.
 
 Lemma disj_sub_regions_sym sr1 sr2 : disj_sub_regions sr1 sr2 = disj_sub_regions sr2 sr1.
 Proof. by rewrite /disj_sub_regions /region_same eq_sym disjoint_zones_sym. Qed.
-
+*)
 (* Lemmas about wf_zone *)
 (* -------------------------------------------------------------------------- *)
-
+(*
 Lemma sub_zone_at_ofs_compose z ofs1 ofs2 len1 len2 :
   sub_zone_at_ofs (sub_zone_at_ofs z (Some ofs1) len1) (Some ofs2) len2 =
   sub_zone_at_ofs z (Some (ofs1 + ofs2)) len2.
@@ -590,9 +753,28 @@ Proof.
   apply (zbetween_zone_sub_zone_at_ofs hwf).
   by move=> _ [<-].
 Qed.
-
+*)
 (* Lemmas about wf_sub_region *)
 (* -------------------------------------------------------------------------- *)
+
+Lemma wf_symbolic_slice_subtype s ty1 ty2 sl :
+  subtype ty2 ty1 ->
+  wf_symbolic_slice s ty1 sl ->
+  wf_symbolic_slice s ty2 sl.
+Proof.
+  move=> hsub hwf cs /hwf{hwf} [hwf1 hwf2]; split=> //.
+  by move /size_of_le : hsub; lia.
+Qed.
+
+Lemma wf_symbolic_zone_subtype z ty1 ty2 sl :
+  subtype ty2 ty1 ->
+  wf_symbolic_zone z ty1 sl ->
+  wf_symbolic_zone z ty2 sl.
+Proof.
+  move=> hsub [hwf1 hwf2]; split=> //.
+  elim: {z hwf2} hwf1 => // s z /(wf_symbolic_slice_subtype hsub) hwf1 _ hwf2.
+  by constructor.
+Qed.
 
 (* The hypothesis [size_of ty2 <= size_of ty1] is enough, but this weakest
    version is enough for our needs.
@@ -602,13 +784,13 @@ Lemma wf_sub_region_subtype sr ty1 ty2 :
   wf_sub_region sr ty1 ->
   wf_sub_region sr ty2.
 Proof.
-  move=> hsub [hwf1 [hwf2 hwf3]]; split=> //; split=> //.
-  by move /size_of_le : hsub; lia.
+  move=> hsub [hwf1 hwf2]; split=> //.
+  by apply (wf_symbolic_zone_subtype hsub).
 Qed.
 
 Definition stype_at_ofs (ofs : option Z) (ty ty' : stype) :=
   if ofs is None then ty' else ty.
-
+(*
 Lemma sub_region_at_ofs_wf sr ty ofs ty2 :
   wf_sub_region sr ty ->
   (forall zofs, ofs = Some zofs -> 0 <= zofs /\ zofs + size_of ty2 <= size_of ty) ->
@@ -838,7 +1020,7 @@ Lemma mk_ofsiP wdb gd s e i aa sz :
   mk_ofsi aa sz e <> None ->
   mk_ofsi aa sz e = Some (i * mk_scale aa sz).
 Proof. by case: e => //= _ [->]. Qed.
-
+*)
 Section EXPR.
   Variables (rmap:region_map) (m0:mem) (s:estate) (s':estate).
   Hypothesis (hvalid: valid_state rmap m0 s s').
@@ -869,8 +1051,9 @@ Section EXPR.
   Lemma check_alignP x sr ty ws tt :
     wf_sub_region sr ty ->
     check_align x sr ws = ok tt ->
-    is_align (sub_region_addr sr) ws.
-  Proof.
+    forall addr, sub_region_addr sr = ok addr ->
+    is_align addr ws.
+  Proof. (*
     move=> hwf; rewrite /check_align; t_xrbindP => halign /eqP halign2.
     have: is_align (Addr sr.(sr_region).(r_slot)) ws.
     + apply (is_align_m halign).
@@ -878,8 +1061,8 @@ Section EXPR.
       by apply (slot_align hwf.(wfr_slot)).
     rewrite /is_align !p_to_zE (wunsigned_sub_region_addr hwf) Z.add_mod //.
     move=> /eqP -> /=.
-    by rewrite -(Zland_mod (z_ofs _)) halign2.
-  Qed.
+    by rewrite -(Zland_mod (z_ofs _)) halign2. *)
+  Admitted.
 
   Lemma get_sub_regionP x sr :
     get_sub_region rmap x = ok sr <-> Mvar.get rmap.(var_region) x = Some sr.
@@ -887,7 +1070,7 @@ Section EXPR.
     rewrite /get_sub_region; case: Mvar.get; last by split.
     by move=> ?; split => -[->].
   Qed.
-
+(*
   Lemma check_validP (x : var_i) ofs len sr sr' :
     check_valid rmap x ofs len = ok (sr, sr') ->
     exists bytes, [/\
@@ -900,17 +1083,17 @@ Section EXPR.
     t_xrbindP=> sr'' /get_sub_regionP -> hmem ? <-; subst sr''.
     by eexists.
   Qed.
-
+*)
   Lemma sub_region_addr_glob x ofs ws :
     wf_global x ofs ws ->
-    sub_region_addr (sub_region_glob x ws) = (rip + wrepr _ ofs)%R.
+    sub_region_addr (sub_region_glob x ws) = ok (rip + wrepr _ ofs)%R.
   Proof.
     by move=> hwf; rewrite /sub_region_addr /= hwf.(wfg_offset) wrepr0 GRing.addr0.
   Qed.
 
   Lemma sub_region_addr_direct x sl ofs ws z sc :
     wf_direct x sl ofs ws z sc ->
-    sub_region_addr (sub_region_direct sl ws sc z) = (wbase_ptr sc + wrepr _ (ofs + z.(z_ofs)))%R.
+    sub_region_addr (sub_region_direct sl ws sc z) = ok (wbase_ptr sc + wrepr _ (ofs + z.(z_ofs)))%R.
   Proof.
     by move=> hwf; rewrite /sub_region_addr hwf.(wfd_offset) wrepr_add GRing.addrA.
   Qed.
