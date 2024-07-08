@@ -689,7 +689,7 @@ Definition mk_ofs aa ws e1 ofs :=
 Definition mk_ofs_sp aa ws e1 :=
   let sz := mk_scale aa ws in
   if is_spexpr_const e1 is Some i then SPconst (i * sz)
-  else SPapp2 (Oadd Op_int) (SPconst sz) e1.
+  else SPapp2 (Omul Op_int) (SPconst sz) e1.
 
 Section CHECK.
 
