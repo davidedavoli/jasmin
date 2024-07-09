@@ -345,14 +345,16 @@ Definition sub_zone_at_ofs z ofs len :=
   match split_last z with
   | None => [:: {| ss_ofs := ofs; ss_len := len |}]
   | Some (z', s) =>
-    match is_spexpr_const s.(ss_len), is_spexpr_const ofs, is_spexpr_const len with
-    | Some len1, Some ofs2, Some len2 => (* if (ofs2 == 0) && (len1 == len2) then z else *)
-    match is_spexpr_const s.(ss_ofs) with
-    | Some ofs1 => z' ++ [:: {| ss_ofs := SPconst (ofs1 + ofs2); ss_len := SPconst len2 |}]
-    | _ => z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
-    end
-    | _, _, _ => z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
-    end
+    if (is_spexpr_const ofs == Some 0%Z) && (s.(ss_len) == len) then z
+    else
+      match is_spexpr_const s.(ss_len), is_spexpr_const ofs, is_spexpr_const len with
+      | Some len1, Some ofs2, Some len2 => (* if (ofs2 == 0) && (len1 == len2) then z else *)
+      match is_spexpr_const s.(ss_ofs) with
+      | Some ofs1 => z' ++ [:: {| ss_ofs := SPconst (ofs1 + ofs2); ss_len := SPconst len2 |}]
+      | _ => z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
+      end
+      | _, _, _ => z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
+      end
   end.
 
 Definition sub_region_at_ofs sr ofs len :=
