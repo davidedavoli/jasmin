@@ -37,11 +37,6 @@ Context {atoI : arch_toIdent}.
 Definition is_load e :=
   if e is Pload _ _ _ _ then true else false.
 
-Definition is_arith_small_pexpr n :=
-  if is_wconst_of_size Uptr n is Some z then
-    is_arith_small z
-  else false.
-
 Definition arm_mov_ofs
   (x : lval) (tag : assgn_tag) (vpk : vptr_kind) (y : pexpr) (ofs : pexpr) :
   option instr_r :=
@@ -58,16 +53,19 @@ Definition arm_mov_ofs
       else
         if is_zero Uptr ofs then mk (MOV, [:: y])
         else
-          (* This allows to remove constraint in register allocation *)
-          if is_arith_small_pexpr ofs then mk (ADD, [::y; ofs ])
-          else
-            (* These checks are not needed for the proof, but it is probably better
-               to fail here than in asm_gen. *)
-            if y is Pvar y_ then
-              if [&& vtype x_ == sword U32 & vtype y_.(gv) == sword U32] then
-                Some (Copn [::x] tag (Oasm (ExtOp Oarm_add_large_imm)) [::y; ofs ])
+          if is_wconst_of_size Uptr ofs is Some zofs then
+            (* This allows to remove constraint in register allocation *)
+            if is_arith_small zofs then mk (ADD, [::y; ofs ])
+            else
+              (* These checks are not needed for the proof, but it is probably better
+                 to fail here than in asm_gen. *)
+              if y is Pvar y_ then
+                if [&& vtype x_ == sword U32 & vtype y_.(gv) == sword U32] then
+                  Some (Copn [::x] tag (Oasm (ExtOp Oarm_add_large_imm)) [::y; ofs ])
+                else None
               else None
-            else None
+          else
+            mk (ADR, [:: add y ofs ])
     | Lmem _ _ _ _ =>
       if is_zero Uptr ofs then mk (STR, [:: y]) else None
     | _ => None
