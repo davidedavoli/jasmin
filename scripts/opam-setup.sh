@@ -2,11 +2,10 @@
 
 set -e
 
-opam init --disable-sandboxing --no-setup --compiler=4.14.1
+opam init --disable-sandboxing --no-setup --compiler=4.14.2
 if [ 1 -le $# ]
 then
   opam repo add coq-released https://coq.inria.fr/opam/released
-  opam pin --yes --no-action add coq-mathcomp-word https://github.com/jasmin-lang/coqword.git
   opam pin --yes --no-depexts --no-action add .
 else
   opam pin --yes --no-depexts --no-action add compiler

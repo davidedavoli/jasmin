@@ -1,5 +1,6 @@
 (* -------------------------------------------------------------------- *)
-From mathcomp Require Import all_ssreflect all_algebra.
+From HB Require Import structures.
+From mathcomp Require Import ssreflect ssrfun ssrbool eqtype.
 Require Import xseq strings utils var type values sopn expr fexpr arch_decl.
 Require Import compiler_util.
 
@@ -153,12 +154,15 @@ Section ARCH.
 Context `{arch : arch_decl}.
 
 Class arch_toIdent :=
-  { toI_r  :> ToIdent reg
-  ; toI_rx :> ToIdent regx
-  ; toI_x  :> ToIdent xreg
-  ; toI_f  :> ToIdent rflag
+  { toI_r  : ToIdent reg
+  ; toI_rx : ToIdent regx
+  ; toI_x  : ToIdent xreg
+  ; toI_f  : ToIdent rflag
   ; inj_toI_reg_regx : forall (r:reg) (rx:regx), to_ident r <> to_ident rx
   }.
+
+#[global]
+Existing Instances toI_r toI_rx toI_x toI_f.
 
 End ARCH.
 
@@ -249,9 +253,9 @@ End ARCH.
  * replace by real asm instructions during the asmgen pass.
  *)
 Class asm_extra (reg regx xreg rflag cond asm_op extra_op : Type) :=
-  { _asm   :> asm reg regx xreg rflag cond asm_op
-  ; _atoI  :> arch_toIdent
-  ; _extra :> asmOp extra_op (* description of extra ops *)
+  { _asm   : asm reg regx xreg rflag cond asm_op
+  ; _atoI  : arch_toIdent
+  ; _extra : asmOp extra_op (* description of extra ops *)
   (* How to compile extra ops into a assembly instructions. *)
   ; to_asm :
     instr_info
@@ -260,6 +264,9 @@ Class asm_extra (reg regx xreg rflag cond asm_op extra_op : Type) :=
     -> rexprs
     -> cexec (seq (asm_op_msb_t * lexprs * rexprs))
   }.
+
+#[global]
+Existing Instances _asm _atoI _extra.
 
 Definition extra_op_t {reg regx xreg rflag cond asm_op extra_op} {asm_e : asm_extra reg regx xreg rflag cond asm_op extra_op} := extra_op.
 
@@ -273,7 +280,7 @@ Variant extended_op :=
 
 Definition extended_op_beq o1 o2 :=
   match o1, o2 with
-  | BaseOp o1, BaseOp o2 => eq_op (T:= prod_eqType _ ceqT_eqType) o1 o2
+  | BaseOp o1, BaseOp o2 => o1 == o2 :> _ * ceqT_eqType
   | ExtOp o1, ExtOp o2 => o1 == o2 ::>
   | _, _               => false
   end.
@@ -283,8 +290,7 @@ Proof.
   by case=> [] o1 [] o2 /=; (constructor || apply: reflect_inj eqP => ?? []).
 Qed.
 
-Definition extended_op_eqMixin := Equality.Mixin extended_op_eq_axiom.
-Definition extended_op_eqType := EqType extended_op extended_op_eqMixin.
+HB.instance Definition _ := hasDecEq.Build extended_op extended_op_eq_axiom.
 
 Definition get_instr_desc (o: extended_op) : instruction_desc :=
  match o with
@@ -294,6 +300,7 @@ Definition get_instr_desc (o: extended_op) : instruction_desc :=
     ; tin      := id.(id_tin)
     ; i_in     := map sopn_arg_desc id.(id_in)
     ; i_out    := map sopn_arg_desc id.(id_out)
+    ; conflicts:= [::]
     ; tout     := id.(id_tout)
     ; semi     := id.(id_semi)
     ; semu     := @vuincl_app_sopn_v _ _ id.(id_semi) id.(id_tin_narr)

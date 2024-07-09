@@ -50,7 +50,7 @@ type 'len gvar = private {
 module GV : sig
   val mk : Name.t -> v_kind -> 'len gty -> L.t -> Annotations.annotations -> 'len gvar
 
-  val clone : 'len gvar -> 'len gvar
+  val clone : ?dloc: L.t -> 'len gvar -> 'len gvar
 
   val compare : 'len gvar -> 'len gvar -> int
 
@@ -76,7 +76,7 @@ module V : sig
 
   val mk : Name.t -> v_kind -> ty -> L.t -> Annotations.annotations -> var
 
-  val clone : var -> var
+  val clone : ?dloc: L.t -> var -> var
 
   val compare : var -> var -> int
 
@@ -94,15 +94,12 @@ end
 
 module Cident : sig
   type t = var
-  type name = Name.t
 
   val tag : var -> Uint63.t
   val id_name : t -> Name.t
   val id_kind : t -> v_kind
 
-  val name_of_string : char list -> name
-  val string_of_name : name -> char list
-
+  val spill_to_mmx : t -> bool
 end
 
 (* -------------------------------------------------------------------- *)

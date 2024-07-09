@@ -116,7 +116,7 @@ qed.
 
 lemma to_sint_cmp (x : t) : min_sint <= to_sint x <= max_sint.
 proof.
- by rewrite /to_sint /= /smod /=; smt.
+  smt(powS_minus gt0_size to_uint_cmp).
 qed.
 
 lemma of_uintK (x : int) : to_uint (of_int x) = x %% modulus.
@@ -1529,7 +1529,7 @@ op MUL_XX (v1 v2: t) =
 
 op IMUL_overflow (hi lo: t) : bool =
   let ov = wdwords hi lo in
-  (ov < -modulus) || (modulus - 1 < ov).
+  (ov < min_sint) || (max_sint < ov).
 
 op IMUL_XX (v1 v2: t) =
   let lo = v1 * v2 in
@@ -1585,6 +1585,8 @@ op ADCX_XX (v1 v2: t) (c:bool) = addc v1 v2 c.
 op ADOX_XX (v1 v2: t) (c:bool) = addc v1 v2 c.
 
 op MULX_XX (v1 v2: t) = mulu v1 v2.
+op MULX_lo_hi_XX (v1 v2: t) = let (hi,lo) = mulu v1 v2 in (lo, hi).
+op MULX_hi_XX (v1 v2: t) = (mulu v1 v2).`1.
 
 op sub_borrow (x y c: int) : t =
   of_int (x - y - c).
@@ -1991,8 +1993,7 @@ abstract theory W_WS.
      w \bits'S i = WS.of_int 0.
   proof.
     move=> hi;apply WS.wordP => k hk.
-    rewrite bits'SiE 1:// WS.of_intwE /WS.int_bit /= get_to_uint.
-    smt(gt0_r WS.gt0_size sizeBrS).
+    rewrite bits'SiE 1:// WS.of_intwE /WS.int_bit /= get_to_uint sizeBrS /#.
   qed.
 
   lemma get_zero i : WB.of_int 0 \bits'S i = WS.of_int 0.
@@ -2194,6 +2195,25 @@ abstract theory W_WS.
      apply: (ltr_le_trans (2^sizeS)) => //.
      smt (ler_weexpn2l le_size WS.gt0_size).
    qed.
+
+  lemma nosmt zeroextu'BE (x: WS.t) :
+     zeroextu'B x = pack'R_t (Pack.init (fun i => if i = 0 then x else WS.of_int 0)).
+  proof.
+     apply/wordP => i h.
+     rewrite pack'RbE // of_int_bits'S_div // initE h /=.
+     move/mem_range: h.
+     rewrite range_ltn; first exact: gt0_r.
+     case.
+     + by move => ->; rewrite /= to_uintK.
+     rewrite /= => /mem_range h.
+     have -> /= : i <> 0; first smt().
+     rewrite divz_small; last by [].
+     have [-> /= /ltr_le_trans ] := WS.to_uint_cmp x.
+     apply.
+     apply: (ler_trans (2 ^ (sizeS * i))); last exact: ler_norm.
+     apply: ler_weexpn2l; first by [].
+     smt(WS.gt0_size).
+ qed.
 
    lemma zeroextu'B_bit (w:WS.t) i: (zeroextu'B w).[i] = ((0 <= i < sizeS) /\ w.[i]).
    proof.
@@ -2477,8 +2497,20 @@ abstract theory BitWordSH.
       let r  = sar v i in
       rflags_OF i r rc false.
 
+  op RORX_XX (v: t) (i: W8.t) : t =
+    v `|>>>|` shift_mask i.
+
+  op SARX_XX (v i: t) : t =
+    sar v (to_uint i %% size).
+
+  op SHRX_XX (v i: t) : t =
+    v `>>>` to_uint i %% size.
+
+  op SHLX_XX (v i: t) : t =
+    v `<<<` to_uint i %% size.
+
 end SHIFT.
-  
+
 end BitWordSH.
 
 theory W16.

@@ -1,6 +1,4 @@
-From mathcomp Require Import
-  all_ssreflect
-  all_algebra.
+From mathcomp Require Import ssreflect ssrfun ssrbool.
 From mathcomp Require Import word_ssrZ.
 
 Require Import
@@ -40,8 +38,7 @@ Context
   {atoI : arch_toIdent}
   {syscall_state : Type}
   {sc_sem : syscall_sem syscall_state}
-  {eft : eqType}
-  {pT : progT eft}
+  {pT : progT}
   {sCP : semCallParams}.
 
 Definition truncate_args
@@ -62,11 +59,12 @@ Lemma exec_sopn_conditional mn sf osk b vargs vprev vres0 vres1 :
 Proof.
   all: case: sf.
   all: case: osk => [sk|].
-  all: case: mn.
+  all: case: mn => [||||||||||||||||??|??|?|||||||||||||||||||||||||||||||||].
   all: rewrite /truncate_args /truncate_val.
 
+  (* Destruct [vprev]. *)
   all:
-    repeat (
+    do 6? (
       case: vprev => [| ? vprev ] //=;
       t_xrbindP=> //;
       repeat
@@ -80,10 +78,11 @@ Proof.
   all: try move=> <-.
   all: subst.
 
+  (* Destruct [vargs]. *)
   all: rewrite /exec_sopn /=.
   all: case: vargs => [| ? vargs ] //; t_xrbindP => // v.
   all:
-    repeat (
+    do 6? (
       case: vargs => [| ? vargs ] //;
       t_xrbindP => //;
       match goal with
@@ -99,8 +98,15 @@ Proof.
       end
     ).
 
+  (* Introduce and rewrite all semantic checks. *)
   all: move: hsemop.
-  all: move=> [?]; subst v.
+  all: cbn.
+  all:
+    try match goal with
+    | [ |- ?f _ = ok _ -> _ ] => rewrite /f
+    end.
+  all: t_xrbindP=> *; subst v; t_eq_rewrites.
+
   all: by case: b.
 Qed.
 

@@ -53,7 +53,8 @@ module GV = struct
     let v_id = Uint63.of_int (Uniq.gen ()) in
     { v_name; v_id; v_kind; v_ty; v_dloc; v_annot }
 
-  let clone v = mk v.v_name v.v_kind v.v_ty v.v_dloc v.v_annot
+  let clone ?dloc v =
+    mk v.v_name v.v_kind v.v_ty (Option.default v.v_dloc dloc) v.v_annot
 
   let compare v1 v2 = Uint63.compares v1.v_id v2.v_id
 
@@ -84,17 +85,13 @@ module Cident = struct
 
   let tag (x:t) = x.v_id
 
-  type name = Name.t
-
-  let id_name (x: t) : name = x.v_name
+  let id_name (x: t) : Name.t = x.v_name
   let id_kind (x: t) : v_kind = x.v_kind
 
-  let name_of_string = CoreConv.string_of_cstring
-  let string_of_name = CoreConv.cstring_of_string
-
-  (* FIXME: can we use something else that L._dummy? *)
-  let mk x k t = V.mk (CoreConv.string_of_cstring x) k t L._dummy []
-  let mk_flag x = mk x (Reg(Normal,Direct)) tbool
+  let spill_to_mmx (x:t) =
+    match Annot.ensure_uniq1 "spill_to_mmx" Annot.none x.v_annot with
+    | Some () -> true
+    | None    -> false
 
 end
 

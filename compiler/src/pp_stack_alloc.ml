@@ -11,8 +11,8 @@ let rec pp_spexpr fmt e =
   | SPconst i -> Z.pp_print fmt (Conv.z_of_cz i)
   | SPbool b -> Format.pp_print_bool fmt b
   | SPvar v -> Format.fprintf fmt "#%a" pp_pos v
-  | SPget (aa, ws, x, e) -> PrintCommon.pp_arr_access pp_spexpr pp_spexpr pp_pos fmt aa ws x e None
-  | SPsub (aa, ws, len, x, e) -> PrintCommon.pp_arr_access pp_spexpr pp_spexpr pp_pos fmt aa ws x e (Some len)
+  | SPget (al, aa, ws, x, e) -> PrintCommon.pp_arr_access pp_spexpr pp_spexpr fmt al aa ws x e
+  | SPsub (aa, ws, len, x, e) -> PrintCommon.pp_arr_slice pp_spexpr pp_spexpr pp_pos fmt aa ws x e len
   | SPapp1 (op, e) -> Format.fprintf fmt "@[<h>(%s@ %a)@]" (PrintCommon.string_of_op1 op) pp_spexpr e
   | SPapp2 (op, e1, e2) -> Format.fprintf fmt "@[(%a %s@ %a)@]" pp_spexpr e1 (PrintCommon.string_of_op2 op) pp_spexpr e2
   | SPappN _ -> assert false

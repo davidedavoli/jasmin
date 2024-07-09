@@ -1,3 +1,4 @@
+open Utils
 open Var0
 open Prog
 include CoreConv
@@ -78,10 +79,10 @@ let rec cexpr_of_expr = function
   | Pbool  b          -> C.Pbool  b
   | Parr_init n       -> C.Parr_init (pos_of_int n)
   | Pvar x            -> C.Pvar (cgvari_of_gvari x)
-  | Pget (aa,ws, x,e) -> C.Pget (aa, ws, cgvari_of_gvari x, cexpr_of_expr e)
+  | Pget (al, aa,ws, x,e) -> C.Pget (al, aa, ws, cgvari_of_gvari x, cexpr_of_expr e)
   | Psub (aa,ws,len, x,e) -> 
     C.Psub (aa, ws, pos_of_int len, cgvari_of_gvari x, cexpr_of_expr e)
-  | Pload (ws, x, e)  -> C.Pload(ws, cvari_of_vari x, cexpr_of_expr e)
+  | Pload (al, ws, x, e)  -> C.Pload(al, ws, cvari_of_vari x, cexpr_of_expr e)
   | Papp1 (o, e)      -> C.Papp1(o, cexpr_of_expr e)
   | Papp2 (o, e1, e2) -> C.Papp2(o, cexpr_of_expr e1, cexpr_of_expr e2)
   | PappN (o, es) -> C.PappN (o, List.map (cexpr_of_expr) es)
@@ -95,9 +96,9 @@ let rec expr_of_cexpr = function
   | C.Pbool  b          -> Pbool  b
   | C.Parr_init n       -> Parr_init (int_of_pos n)
   | C.Pvar x            -> Pvar (gvari_of_cgvari x)
-  | C.Pget (aa,ws, x,e) -> Pget (aa, ws, gvari_of_cgvari x, expr_of_cexpr e)
+  | C.Pget (al, aa,ws, x,e) -> Pget (al, aa, ws, gvari_of_cgvari x, expr_of_cexpr e)
   | C.Psub (aa,ws,len,x,e) -> Psub (aa, ws, int_of_pos len, gvari_of_cgvari x, expr_of_cexpr e)
-  | C.Pload (ws, x, e)  -> Pload(ws, vari_of_cvari x, expr_of_cexpr e)
+  | C.Pload (al, ws, x, e)  -> Pload(al, ws, vari_of_cvari x, expr_of_cexpr e)
   | C.Papp1 (o, e)      -> Papp1(o, expr_of_cexpr e)
   | C.Papp2 (o, e1, e2) -> Papp2(o, expr_of_cexpr e1, expr_of_cexpr e2)
   | C.PappN (o, es) -> PappN (o, List.map (expr_of_cexpr) es)
@@ -111,16 +112,16 @@ let rec expr_of_cexpr = function
 let clval_of_lval = function
   | Lnone(loc, ty)  -> C.Lnone (loc, cty_of_ty ty)
   | Lvar x          -> C.Lvar  (cvari_of_vari x)
-  | Lmem (ws, x, e) -> C.Lmem (ws, cvari_of_vari x, cexpr_of_expr e)
-  | Laset(aa,ws,x,e)-> C.Laset (aa, ws, cvari_of_vari x, cexpr_of_expr e)
+  | Lmem (al, ws, x, e) -> C.Lmem (al, ws, cvari_of_vari x, cexpr_of_expr e)
+  | Laset(al, aa,ws,x,e)-> C.Laset (al, aa, ws, cvari_of_vari x, cexpr_of_expr e)
   | Lasub(aa,ws,len,x,e)-> 
     C.Lasub (aa, ws, pos_of_int len, cvari_of_vari x, cexpr_of_expr e)
 
 let lval_of_clval = function
   | C.Lnone(p, ty)  -> Lnone (p, ty_of_cty ty)
   | C.Lvar x        -> Lvar (vari_of_cvari x)
-  | C.Lmem(ws,x,e)  -> Lmem (ws, vari_of_cvari x, expr_of_cexpr e)
-  | C.Laset(aa,ws,x,e) -> Laset (aa,ws, vari_of_cvari x, expr_of_cexpr e)
+  | C.Lmem(al,ws,x,e)  -> Lmem (al, ws, vari_of_cvari x, expr_of_cexpr e)
+  | C.Laset(al, aa,ws,x,e) -> Laset (al, aa,ws, vari_of_cvari x, expr_of_cexpr e)
   | C.Lasub(aa,ws,len,x,e) -> 
     Lasub (aa,ws, int_of_pos len, vari_of_cvari x, expr_of_cexpr e)
 
@@ -134,51 +135,49 @@ let expr_of_cexprs es = List.map (expr_of_cexpr) es
 
 (* ------------------------------------------------------------------------ *)
 
-let rec cinstr_of_instr i c =
+let rec cinstr_of_instr i =
   let n = i.i_loc, i.i_annot in
-  cinstr_r_of_instr_r n i.i_desc c
+  cinstr_r_of_instr_r n i.i_desc
 
-and cinstr_r_of_instr_r p i tl =
+and cinstr_r_of_instr_r p i =
   match i with
   | Cassgn(x,t, ty,e) ->
     let ir  =
       C.Cassgn(clval_of_lval x, t, cty_of_ty ty, cexpr_of_expr e) in
-    C.MkI(p, ir) :: tl
+    C.MkI(p, ir)
 
   | Copn(x,t,o,e) ->
     let ir =
       C.Copn(clval_of_lvals x, t, o, cexpr_of_exprs e) in
-    C.MkI(p, ir) :: tl
+    C.MkI(p, ir)
 
   | Csyscall(x,o,e) ->
     let ir =
       C.Csyscall(clval_of_lvals x, o, cexpr_of_exprs e) in
-    C.MkI(p, ir) :: tl
+    C.MkI(p, ir)
 
   | Cif(e,c1,c2) ->
-    let c1 = cstmt_of_stmt c1 [] in
-    let c2 = cstmt_of_stmt c2 [] in
+    let c1 = cstmt_of_stmt c1 in
+    let c2 = cstmt_of_stmt c2 in
     let ir = C.Cif(cexpr_of_expr e, c1, c2) in
-    C.MkI(p, ir) :: tl
+    C.MkI(p, ir)
 
   | Cfor(x, (d,e1,e2), c) ->
     let d = ((d, cexpr_of_expr e1), cexpr_of_expr e2) in
     let x = cvari_of_vari x in
-    let c = cstmt_of_stmt c [] in
+    let c = cstmt_of_stmt c in
     let ir = C.Cfor(x,d,c) in
-    C.MkI(p, ir) :: tl
+    C.MkI(p, ir)
   | Cwhile(a, c, e, c') ->
-    let ir = C.Cwhile(a, cstmt_of_stmt c [], cexpr_of_expr e,
-                      cstmt_of_stmt c' []) in
-    C.MkI(p,ir) :: tl
-  | Ccall(ii, x, f, e) ->
-    let ir =
-      C.Ccall(ii, clval_of_lvals x, f, cexpr_of_exprs e)
-    in
-    C.MkI(p,ir) :: tl
+    let ir = C.Cwhile(a, cstmt_of_stmt c, cexpr_of_expr e,
+                      cstmt_of_stmt c') in
+    C.MkI(p,ir)
+  | Ccall(x, f, e) ->
+    let ir = C.Ccall(clval_of_lvals x, f, cexpr_of_exprs e) in
+    C.MkI(p,ir)
 
-and cstmt_of_stmt c tl =
-  List.fold_right (cinstr_of_instr) c tl
+and cstmt_of_stmt c =
+  List.map cinstr_of_instr c
 
 let rec instr_of_cinstr i =
   match i with
@@ -211,11 +210,11 @@ and instr_r_of_cinstr_r = function
   | Cwhile(a, c, e, c') ->
     Cwhile(a, stmt_of_cstmt c, expr_of_cexpr e, stmt_of_cstmt c')
 
-  | Ccall(ii, x, f, e) ->
-    Ccall(ii, lval_of_clvals x, f, expr_of_cexprs e)
+  | Ccall(x, f, e) ->
+    Ccall(lval_of_clvals x, f, expr_of_cexprs e)
 
 and stmt_of_cstmt c =
-  List.map (instr_of_cinstr) c
+  List.map instr_of_cinstr c
 
 
 (* ------------------------------------------------------------------------ *)
@@ -224,8 +223,8 @@ let cufdef_of_fdef fd =
   let f_info = fd.f_loc, fd.f_annot, fd.f_cc, fd.f_outannot in
   let f_params =
     List.map (fun x -> cvari_of_vari (L.mk_loc L._dummy x)) fd.f_args in
-  let f_body = cstmt_of_stmt fd.f_body [] in
-  let f_res = List.map (cvari_of_vari) fd.f_ret in
+  let f_body = cstmt_of_stmt fd.f_body in
+  let f_res = List.map cvari_of_vari fd.f_ret in
   fn, { C.f_info   = f_info;
         C.f_tyin   = List.map cty_of_ty fd.f_tyin;
         C.f_params = f_params;
@@ -283,7 +282,7 @@ let prog_of_csprog p =
 let to_array ty p t = 
   let ws, n = array_kind ty in
   let get i = 
-    match Warray_.WArray.get p Warray_.AAscale ws t (cz_of_int i) with
+    match Warray_.WArray.get p Aligned Warray_.AAscale ws t (cz_of_int i) with
     | Utils0.Ok w -> z_of_word ws w
     | _    -> assert false in
   ws, Array.init n get
@@ -333,7 +332,7 @@ let error_of_cerror pp_err e =
   let msg = Format.dprintf "%a" pp_err e.Compiler_util.pel_msg in
   let iloc = iloc_of_loc e in
   let funname = Option.map (fun fn -> fn.fn_name) e.pel_fn in
-  let pass = Option.map string_of_cstring e.pel_pass in
+  let pass = e.pel_pass in
   { err_msg = msg;
     err_loc = iloc;
     err_funname = funname;
@@ -345,8 +344,8 @@ let error_of_cerror pp_err e =
 (* -------------------------------------------------------------------------- *)
 let fresh_var_ident =
   let memo = Hashtbl.create 5 in
-  fun r (i_loc, _) n st ->
-    let k = (r, i_loc.L.uid_loc, n, st) in
+  fun r (i_loc, _) num n st ->
+    let k = (r, i_loc.L.uid_loc, num, n, st) in
     match Hashtbl.find memo k with
     | x -> x
     | exception Not_found ->
