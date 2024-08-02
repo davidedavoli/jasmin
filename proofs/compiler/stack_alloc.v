@@ -109,67 +109,123 @@ End CmpR.
 Module Mr := Mmake CmpR.
 
 (* ------------------------------------------------------------------ *)
-Record zone := {
-  z_ofs : Z;
-  z_len : Z;
+
+(* A slice represents a contiguous portion of memory.
+  We have them in two flavors:
+  - [concrete_slice] where the components are integers; concrete slices are used
+    to describe the shape of the stack, since we know everything statically.
+  - [symbolic_slice] where the components are symbolic expressions; symbolic
+    slices are used in the analysis, since there we do not necessarily know the
+    offsets statically.
+*)
+Record concrete_slice := {
+  cs_ofs : Z;
+  cs_len : Z;
 }.
 
-Scheme Equality for zone.
+(* We reuse [pexpr], but only the arithmetic part is of interest here. *)
+Record symbolic_slice := {
+  ss_ofs : pexpr;
+  ss_len : pexpr;
+}.
 
-Lemma zone_eq_axiom : Equality.axiom zone_beq.
-Proof.
-  exact: (eq_axiom_of_scheme internal_zone_dec_bl internal_zone_dec_lb).
-Qed.
+Definition symbolic_slice_beq s1 s2 :=
+  (eq_expr s1.(ss_ofs) s2.(ss_ofs)) && (eq_expr s1.(ss_len) s2.(ss_len)).
 
-HB.instance Definition _ := hasDecEq.Build zone zone_eq_axiom.
+(* A symbolic zone is a memory portion written as a list of symbolic slices,
+   each slice being included in the previous one.
+   For instance, [i, j][k, l], is the [k, l]-slice of the [i, j]-slice. It could
+   also be described as the slice [i+k, l]. We store it as [i, j][k, l]
+   to remember some structure.
+*)
+Definition symbolic_zone := seq symbolic_slice.
 
-Definition disjoint_zones z1 z2 :=
-  (((z1.(z_ofs) + z1.(z_len))%Z <= z2.(z_ofs)) ||
-   ((z2.(z_ofs) + z2.(z_len))%Z <= z1.(z_ofs)))%CMP.
+(* TODO: pick this definition in a library instead *)
+Fixpoint list_beq {A} (eqb : A -> A -> bool) (l1 l2 : list A) :=
+  match l1, l2 with
+  | [::], [::] => true
+  | a1 :: l1, a2 :: l2 => eqb a1 a2 && list_beq eqb l1 l2
+  | _, _ => false
+  end.
+
+Definition symbolic_zone_beq :=
+  list_beq symbolic_slice_beq.
 
 (* ------------------------------------------------------------------ *)
 (* A zone inside a region. *)
 Record sub_region := {
     sr_region : region;
-    sr_zone  : zone;
+    sr_zone  : symbolic_zone;
   }.
 
 Definition sub_region_beq sr1 sr2 :=
-  (sr1.(sr_region) == sr2.(sr_region)) && (sr1.(sr_zone) == sr2.(sr_zone)).
-
-Lemma sub_region_eq_axiom : Equality.axiom sub_region_beq.
-Proof.
-  rewrite /sub_region_beq => -[mp1 sub1] [mp2 sub2].
-  by apply:(iffP andP) => /= [[/eqP -> /eqP ->] | [-> ->]].
-Qed.
-
-HB.instance Definition _ := hasDecEq.Build sub_region sub_region_eq_axiom.
+  (sr1.(sr_region) == sr2.(sr_region)) && (symbolic_zone_beq sr1.(sr_zone) sr2.(sr_zone)).
 
 (* ------------------------------------------------------------------ *)
-(* idea: could we use a gvar instead of var & v_scope? *)
+
+(* TODO: we can certainly do better for globals (even if just for consistency).
+   3 distinct directions:
+   - PIdirect with sc = Sglob could be just PIglob g, with g the global
+   - the globals (the real ones) could be described using PIdirect with sc = Sglob
+   - every Pdirect could never be added to rmap since we enforce that
+     sr = sub_region_direct s ws sc z (cf. the proof)
+*)
+
+(* Stack variables are classified into three categories:
+   - PIdirect x cs sc:
+       a stack slot (if sc = Slocal) or a global slot (if sc = Sglob);
+       [x] is the name of the region, [cs] is the slice of the region where
+       the slot is.
+   - PIregptr p:
+       a reg ptr, [p] is the name of the pointer to use in the target program.
+   - PIstkptr x cs xp:
+       a stack ptr,
+       [x] is the name of the region where the pointer lies, [cs] is the slice
+       of the region where the pointer is, [xp] is a pseudo-variable allowing
+       to track that the pointer was not overwritten.
+
+   More information:
+   - global slot: direct slots with sc = Sglob are local stack variables
+       assigned to globals (this can be useful, for instance, if you want
+       to pass a global array to an inline function expecting a stack array
+       as argument); this must not be confused with the globals themselves
+       that do not appear in this classification.
+   - stack ptrs have two associated sub-regions:
+     - the one stored in [rmap] which is the region corresponding to the pointed
+       zone of memory,
+     - the zone of the pointer itself described by PIstkptr.
+*)
 Variant ptr_kind_init :=
-| PIdirect of var & zone & v_scope
+| PIdirect of var & concrete_slice & v_scope
 | PIregptr of var
-| PIstkptr of var & zone & var.
+| PIstkptr of var & concrete_slice & var.
 
+(* [ptr_kind] is [ptr_kind_init] with one more piece of information,
+   the offset of the region (in cases [Pdirect] and [Pstkptr]). *)
 Variant ptr_kind :=
-| Pdirect of var & Z & wsize & zone & v_scope
+| Pdirect of var & Z & wsize & concrete_slice & v_scope
 | Pregptr of var
-| Pstkptr of var & Z & wsize & zone & var.
+| Pstkptr of var & Z & wsize & concrete_slice & var.
 
+(* An instance of this record is attached to each [reg ptr] argument of every
+   function. *)
 Record param_info := {
-  pp_ptr      : var;
-  pp_writable : bool;
-  pp_align    : wsize;
+  pp_ptr      : var; (* the name of the pointer to use in the target *)
+  pp_writable : bool; (* whether the pointer is writable *)
+  pp_align    : wsize; (* the minimal alignment of the pointed memory zone *)
 }.
 
 Record pos_map := {
-  vrip    : var;
-  vrsp    : var;
-  vxlen   : var;
+  vrip    : var; (* the variable containing rip (used for globals) *)
+  vrsp    : var; (* the variable containing SP (the stack pointer) *)
+  vxlen   : var; (* a variable used to compile syscalls *)
   globals : Mvar.t (Z * wsize);
+    (* a map associating an offset and an alignment to each global *)
   locals  : Mvar.t ptr_kind;
+    (* a map associating a ptr_kind to each stack variable *)
   vnew    : Sv.t;
+    (* the set of fresh variables (we check that they do not appear in the
+       source program) *)
 }.
 
 (* TODO: Z.land or is_align ?
@@ -177,8 +233,11 @@ Record pos_map := {
 Definition check_align al x (sr:sub_region) ws :=
   Let _ := assert ((al == Unaligned) || (ws <= sr.(sr_region).(r_align))%CMP) (* TODO: is this check needed? *)
                   (stk_ierror_basic x "unaligned offset") in
-  assert ((al == Unaligned) || (Z.land sr.(sr_zone).(z_ofs) (wsize_size ws - 1) == 0)%Z)
-         (stk_ierror_basic x "unaligned sub offset").
+  (* FIXME SYMBOLIC: how to check the alignment ? *)
+  (* idea: use align/misaligned instructions, only use aligned ones when we are statically sure that it's ok *)
+(*   assert ((al == Unaligned) || (Z.land sr.(sr_zone).(z_ofs) (wsize_size ws - 1) == 0)%Z)
+         (stk_ierror_basic x "unaligned sub offset"). *)
+  ok tt.
 
 Definition writable (x:var_i) (r:region) :=
   assert r.(r_writable)
@@ -186,20 +245,41 @@ Definition writable (x:var_i) (r:region) :=
 
 Module Region.
 
-Definition bytes_map := Mvar.t ByteSet.t.
+Inductive symbolic_tree :=
+| Node : symbolic_slice -> seq symbolic_tree -> symbolic_tree.
+
+(* TODO: it seems everything could be Borrowed
+   Valid == Borrowed [::]
+   Unknown == Borrowed [::full_zone]
+   Do we really need the 3 cases? maybe for clarity
+*)
+
+(* A status synthetizes what we know about a sub-region. *)
+Variant status :=
+| Valid
+  (* The sub-region is fully valid, we can read everywhere. *)
+| Unknown
+  (* We don't know anything about the sub-region, we cannot read anywhere. *)
+| Borrowed of symbolic_tree.
+  (* Some parts of the sub-region are "borrowed" by other variables, we cannot
+     read in them. We remember a tree of disjoint symbolic zones
+     that are borrowed. *)
+
+Definition status_map := Mvar.t status.
 
 Record region_map := {
-  var_region : Mvar.t sub_region; (* The region where the value is initialy stored            *)
-  region_var :> Mr.t bytes_map;     (* The set of source variables whose value is in the region *)
-    (* region -> var -> ByteSet.t *)
+  var_region : Mvar.t sub_region; (* the region associated to the source variable     *)
+  region_var :> Mr.t status_map;  (* the status associated to variables in the region *)
+    (* region -> var -> status *)
 }.
 
-Definition empty_bytes_map := Mvar.empty ByteSet.t.
-
+Definition empty_status_map := Mvar.empty status.
+(*
 Definition empty := {|
   var_region := Mvar.empty _;
-  region_var := Mr.empty bytes_map;
+  region_var := Mr.empty status_map;
 |}.
+*)
 
 Definition get_sub_region (rmap:region_map) (x:var_i) :=
   match Mvar.get rmap.(var_region) x with
@@ -207,50 +287,129 @@ Definition get_sub_region (rmap:region_map) (x:var_i) :=
   | None => Error (stk_error x (pp_box [:: pp_s "no region associated to variable"; pp_var x]))
   end.
 
-Definition get_bytes_map (r:region) rv : bytes_map :=
-  odflt empty_bytes_map (Mr.get rv r).
+Definition get_status_map (r:region) rv : status_map :=
+  odflt empty_status_map (Mr.get rv r).
+(*
+Definition get_status (x:var) (status_map:status_map) :=
+  odflt Unknown (Mvar.get status_map x).
+*)
 
-Definition get_bytes (x:var) (bytes_map:bytes_map) :=
-  odflt ByteSet.empty (Mvar.get bytes_map x).
-
-Definition interval_of_zone z :=
-  {| imin := z.(z_ofs); imax := z.(z_ofs) + z.(z_len) |}.
-
-Definition get_var_bytes rv r x :=
-  let bm := get_bytes_map r rv in
-  let bytes := get_bytes x bm in
-  bytes.
+Definition get_var_status rv r (x:var_i) : result _ status :=
+  match Mr.get rv r with
+  | Some sm =>
+    match Mvar.get sm x with
+    | Some status => ok status
+    | None => Error (stk_ierror x (pp_box [:: pp_s "no status associated to variable"; pp_var x]))
+    end
+  | None => Error (stk_ierror x (pp_box [:: pp_s "unknown region"]))
+  end.
 
 (* Returns the sub-zone of [z] starting at offset [ofs] and of length [len].
-   The offset [z] can be None, meaning its exact value is not known. In this
-   case, the full zone [z] is returned. This is a safe approximation.
+   There is a special case if we access the full sub-region. In that case, [z]
+   is returned.
 *)
-Definition sub_zone_at_ofs z ofs len :=
-  match ofs with
-  | None => z
-  | Some ofs => {| z_ofs := z.(z_ofs) + ofs; z_len := len |}
-  end.
+Definition sub_zone_at_ofs (z:symbolic_zone) ofs len :=
+  (* TODO: z is never nil, but check this *)
+  let sl := last {| ss_ofs := Pconst 0; ss_len := Pconst 0 |} z in
+  if eq_expr ofs (Pconst 0) && eq_expr len sl.(ss_len) then z
+  else
+    z ++ [:: {| ss_ofs := ofs; ss_len := len |}].
 
 Definition sub_region_at_ofs sr ofs len :=
   {| sr_region := sr.(sr_region);
      sr_zone   := sub_zone_at_ofs sr.(sr_zone) ofs len
   |}.
+(*
+Fixpoint filter_tree (z : symbolic_zone) (tree : symbolic_tree) : option symbolic_tree :=
+  match z with
+  | [::] => Some tree
+  | s :: z =>
+    match tree with
+    | Node s' l =>
+      if symbolic_slice_beq s s' then
+        let l' := pmap (filter_tree z) l in
+        Some (Node s' l')
+      else None
+    end
+  end.
+*)
+Fixpoint get_subtree_aux z (l : seq symbolic_tree) : seq symbolic_tree :=
+  match z with
+  | [::] => l
+  | s :: z =>
+    let l :=
+      match List.find (fun '(Node s' l) => symbolic_slice_beq s s') l with
+      | Some (Node s' l) => l
+      | None => [::]
+      end
+    in
+    [:: Node s (get_subtree_aux z l)]
+  end.
 
+Definition get_subtree z (tree : symbolic_tree) : option symbolic_tree :=
+  match z with
+  | [::] => None
+  | s :: z =>
+    match tree with
+    | Node s' l =>
+      if symbolic_slice_beq s s' then Some (Node s (get_subtree_aux z l))
+      else None
+    end
+  end.
+(*
+Definition z : symbolic_zone := [:: {| ss_ofs := Pconst 0; ss_len := Pconst 10 |}; {| ss_ofs := Pconst 3; ss_len := Pconst 5 |}].
+Definition tree : symbolic_tree :=
+  Node
+    {| ss_ofs := Pconst 0; ss_len := Pconst 10 |}
+    [:: Node {| ss_ofs := Pconst 3; ss_len := Pconst 5 |} [::];
+        Node {| ss_ofs := Pconst 4; ss_len := Pconst 7 |} [::] ].
+Eval compute in get_subtree z tree.
+*)
+
+(* FIXME: argument: symbolic_zone or sub_region? *)
+Definition filter_status (z:symbolic_zone) (status:status) :=
+  match status with
+  | Valid => Valid
+  | Unknown => Unknown
+  | Borrowed tree =>
+    match get_subtree z tree with
+    | None => Valid
+    | Some tree => Borrowed tree
+    end
+  end.
+(*
+(* TODO: If sub_region_at_ofs return sr, we don't want to filter. Should we deal
+   with the special case ofs = 0 /\ len = size_of x here,
+   instead of inside sub_region_at_ofs ? *)
 Definition get_sub_region_bytes (rmap:region_map) (x:var_i) ofs len :=
   (* we get the bytes associated to variable [x] *)
   Let sr := get_sub_region rmap x in
-  let bytes := get_var_bytes rmap sr.(sr_region) x in
+  Let status := get_var_status rmap sr.(sr_region) x in
   let sr' := sub_region_at_ofs sr ofs len in
-  let isub_ofs := interval_of_zone sr'.(sr_zone) in
-  ok (sr, sr', ByteSet.inter bytes (ByteSet.full isub_ofs)).
+  ok (sr', filter_status sr'.(sr_zone) status).
+*)
+Definition is_valid status :=
+  if status is Valid then true else false.
 
-Definition check_valid x sr bytes :=
+Definition check_valid x status :=
   Let _ :=
-    assert (ByteSet.mem bytes (interval_of_zone sr.(sr_zone)))
+    assert (is_valid status)
            (stk_error x (pp_box [:: pp_s "the region associated to variable"; pp_var x; pp_s "is partial"]))
   in
   ok tt.
 
+Fixpoint tree_of_zone z :=
+  match z with
+  | [::] => [::]
+  | s :: z => [::Node s (tree_of_zone z)]
+  end.
+
+Definition clear_status z status :=
+  match status with
+  | Valid => Borrowed [:: z]
+  | Unknown => Unknown
+  | Borrowed z2 => Borrowed (insert_zone z z2)
+  end.
 Definition clear_bytes i bytes := ByteSet.remove bytes i.
 (* TODO: check optim
   let bytes := ByteSet.remove bytes i in
@@ -263,7 +422,14 @@ Definition clear_bytes_map i (bm:bytes_map) :=
   let bm := Mvar.filter_map (clear_bytes i) bm in
   if Mvar.is_empty bm then None else Some bm.
 *)
+*)
 
+Definition set_word_bytes rv x sr :=
+  let sm := get_status_map sr.(sr_region) rv in
+  let sm := Mvar.set sm x Valid in
+  Mr.set rv sr.(sr_region) sm.
+
+(*
 (* TODO: take [bytes] as an argument ? *)
 Definition set_pure_bytes rv (x:var) sr ofs len :=
   let z     := sr.(sr_zone) in
@@ -289,7 +455,7 @@ Definition set_sub_region rmap (x:var_i) sr (ofs : option Z) (len : Z) :=
   Let rv := set_bytes rmap x sr ofs len in
   ok {| var_region := Mvar.set rmap.(var_region) x sr;
         region_var := rv |}.
-
+*)
 Definition sub_region_stkptr s ws z :=
   let r := {| r_slot := s; r_align := ws; r_writable := true |} in
   {| sr_region := r; sr_zone := z |}.
@@ -297,6 +463,7 @@ Definition sub_region_stkptr s ws z :=
 Section WITH_POINTER_DATA.
 Context {pd: PointerData}.
 
+(*
 Definition set_stack_ptr (rmap:region_map) s ws z (x':var) :=
   let sr := sub_region_stkptr s ws z in
   let rv := set_pure_bytes rmap x' sr (Some 0)%Z (wsize_size Uptr) in
@@ -310,9 +477,11 @@ Definition check_stack_ptr rmap s ws z x' :=
   let i := interval_of_zone z in
   let bytes := get_var_bytes rmap sr.(sr_region) x' in
   ByteSet.mem bytes i.
+*)
 
 End WITH_POINTER_DATA.
 
+(*
 (* Precondition size_of x = ws && length sr.sr_zone = wsize_size ws *)
 Definition set_word rmap (x:var_i) sr ws :=
   Let _ := check_align Aligned x sr ws in
@@ -400,7 +569,7 @@ Definition merge (rmap1 rmap2:region_map) :=
         | _, _ => None
         end) rmap1.(var_region) rmap2.(var_region);
      region_var := Mr.map2 merge_bytes_map rmap1.(region_var) rmap2.(region_var) |}.
-
+*)
 End Region.
 
 Import Region.
@@ -440,7 +609,7 @@ Section CHECK.
 
    When the code is called from the OCaml oracle, all the checks
    that are performed so that the pass can be proved correct are actually not
-   needed. We introduce this boolen [check] to deactivate some of the tests
+   needed. We introduce this boolean [check] to deactivate some of the tests
    when the code is called from the oracle.
 
    TODO: deactivate more tests (or even do not use rmap) when [check] is [false]
@@ -451,10 +620,12 @@ Definition assert_check E b (e:E) :=
   if check then assert b e
   else ok tt.
 
+(* TODO: move close to ptr_kind? *)
 Variant vptr_kind :=
   | VKglob of Z * wsize
   | VKptr  of ptr_kind.
 
+(* TODO: remove? *)
 Definition var_kind := option vptr_kind.
 
 Record stack_alloc_params :=
@@ -530,7 +701,7 @@ Definition base_ptr sc :=
 
 Definition addr_from_pk (x:var_i) (pk:ptr_kind) :=
   match pk with
-  | Pdirect _ ofs _ z sc => ok (with_var x (base_ptr sc), ofs + z.(z_ofs))
+  | Pdirect _ ofs _ cs sc => ok (with_var x (base_ptr sc), ofs + cs.(cs_ofs))
   | Pregptr p            => ok (with_var x p,             0)
   | Pstkptr _ _ _ _ _    =>
     Error (stk_error x (pp_box [::
@@ -560,32 +731,42 @@ Definition get_var_kind x :=
     ok (omap VKptr (get_local xv)).
 
 Definition sub_region_full x r :=
-  let z := {| z_ofs := 0; z_len := size_slot x |} in
+  let z := [:: {| ss_ofs := Pconst 0; ss_len := Pconst (size_slot x) |}] in
   {| sr_region := r; sr_zone := z |}.
 
 Definition sub_region_glob x ws :=
   let r := {| r_slot := x; r_align := ws; r_writable := false |} in
   sub_region_full x r.
 
-Definition check_vpk rmap (x:var_i) vpk ofs len :=
+Definition get_sub_region_status (rmap:region_map) (x:var_i) :=
+  Let sr := get_sub_region rmap x in
+  Let status := get_var_status rmap sr.(sr_region) x in
+  ok (sr, status).
+
+(* We need the vpk only to get the alignment in case VKglob *)
+Definition gget_sub_region_status rmap (x:var_i) vpk :=
   match vpk with
   | VKglob (_, ws) =>
     let sr := sub_region_glob x ws in
-    let sr' := sub_region_at_ofs sr ofs len in
-    (* useless inter, but allows to state a uniform lemma *)
-    let bytes := ByteSet.inter (ByteSet.full (interval_of_zone sr.(sr_zone)))
-                               (ByteSet.full (interval_of_zone sr'.(sr_zone)))
-    in
-    ok (sr, sr', bytes)
+    ok (sr, Valid)
   | VKptr _pk =>
-    get_sub_region_bytes rmap x ofs len
+    get_sub_region_status rmap x
+  end.
+(*
+Definition check_vpk rmap (x:var_i) vpk :=
+  match vpk with
+  | VKglob (_, ws) =>
+    let sr := sub_region_glob x ws in
+    ok (sr, Valid)
+  | VKptr _pk =>
+    get_sub_region_bytes rmap x
   end.
 
 Definition check_vpk_word rmap al x vpk ofs ws :=
   Let: (sr, sr', bytes) := check_vpk rmap x vpk ofs (wsize_size ws) in
   Let _ := check_valid x sr' bytes in
   check_align al x sr ws.
-
+*)
 Definition bad_arg_number := stk_ierror_no_var "invalid number of args".
 
 Fixpoint alloc_e (e:pexpr) ty :=
@@ -599,7 +780,9 @@ Fixpoint alloc_e (e:pexpr) ty :=
     | Some vpk =>
       if is_word_type ty is Some ws then
         if subtype (sword ws) (vtype xv) then
-          Let _ := check_vpk_word rmap Aligned xv vpk (Some 0%Z) ws in
+          Let: (_, status) := gget_sub_region_status rmap xv vpk in
+          Let _ := check_valid xv status in
+(*           Let _ := check_vpk_word rmap Aligned xv vpk (Some 0%Z) ws in *)
           Let pofs := mk_addr xv AAdirect ws vpk (Pconst 0) in
           ok (Pload Aligned ws pofs.1 pofs.2)
         else Error (stk_ierror_basic xv "invalid type for expression")
@@ -613,8 +796,8 @@ Fixpoint alloc_e (e:pexpr) ty :=
     match vk with
     | None => Let _ := check_diff xv in ok (Pget al aa ws x e1)
     | Some vpk =>
-      let ofs := mk_ofsi aa ws e1 in
-      Let _ := check_vpk_word rmap al xv vpk ofs ws in
+      Let: (_, status) := gget_sub_region_status rmap xv vpk in
+      Let _ := check_valid xv status in
       Let pofs := mk_addr xv aa ws vpk e1 in
       ok (Pload al ws pofs.1 pofs.2)
     end
@@ -653,8 +836,9 @@ Fixpoint alloc_e (e:pexpr) ty :=
 
 End ALLOC_E.
 
-Definition sub_region_direct x align sc z :=
+Definition sub_region_direct x align sc cs :=
   let r := {| r_slot := x; r_align := align; r_writable := sc != Sglob |} in
+  let z := [:: {| ss_ofs := Pconst cs.(cs_ofs); ss_len := Pconst cs.(cs_len) |}] in
   {| sr_region := r; sr_zone := z |}.
 
 Definition sub_region_stack x align z :=
@@ -666,12 +850,18 @@ Definition sub_region_pk x pk :=
   | _ => Error (stk_ierror x (pp_box [:: pp_var x; pp_s "is not in the stack"]))
   end.
 
+(* We write in variable [x]. The variable is marked as Valid. *)
+Definition set_word rmap (x:var_i) sr ws :=
+  Let _ := check_align Aligned x sr ws in
+  ok
+    {| var_region := Mvar.set rmap.(var_region) x sr;
+       region_var := set_word_bytes rmap x sr |}.
+
 Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
   match r with
   | Lnone _ _ => ok (rmap, r)
 
   | Lvar x =>
-    (* TODO: could we remove this [check_diff] and use an invariant in the proof instead? *)
     match get_local x with
     | None => Let _ := check_diff x in ok (rmap, r)
     | Some pk =>
@@ -680,19 +870,19 @@ Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
           Let pofs := mk_addr_ptr x AAdirect ws pk (Pconst 0) in
           Let sr   := sub_region_pk x pk in
           let r := Lmem Aligned ws pofs.1 pofs.2 in
-          Let rmap := Region.set_word rmap x sr ws in
+          Let rmap := set_word rmap x sr ws in
           ok (rmap, r)
         else Error (stk_ierror_basic x "invalid type for assignment")
       else Error (stk_ierror_basic x "not a word variable in assignment")
     end
 
   | Laset al aa ws x e1 =>
-    (* TODO: could we remove this [check_diff] and use an invariant in the proof instead? *)
     Let e1 := alloc_e rmap e1 sint in
     match get_local x with
     | None => Let _ := check_diff x in ok (rmap, Laset al aa ws x e1)
     | Some pk =>
       let ofs := mk_ofsi aa ws e1 in
+      Let sr := get_sub
       Let rmap := set_arr_word rmap al x ofs ws in
       Let pofs := mk_addr_ptr x aa ws pk e1 in
       let r := Lmem al ws pofs.1 pofs.2 in
