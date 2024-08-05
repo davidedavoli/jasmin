@@ -657,17 +657,24 @@ Definition add := Papp2 (Oadd (Op_w Uptr)).
 (* TODO: do we need to do the check here? I think we can always return the
    "else" version, and in a later pass, it will be recognized as a constant? *)
 (* It seems indeed that it is an optim, mk_lea recognize that it is a constant. *)
-Definition mk_ofs aa ws e1 ofs :=
+Definition mk_ofs aa ws e1 :=
   let sz := mk_scale aa ws in
   if is_const e1 is Some i then
-    cast_const (i * sz + ofs)%Z
+    cast_const (i * sz)%Z
   else
-    add (mul (cast_const sz) (cast_ptr e1)) (cast_const ofs).
+    mul (cast_const sz) (cast_ptr e1).
 
+(* Do we want the optim for constants? *)
+Definition add_ofs ofs1 ofs2 :=
+  match is_wconst Uptr ofs1 with
+  | Some w1 => cast_const (wunsigned w1 + ofs2)
+  | None => add ofs1 (cast_const ofs2)
+  end.
+(*
 Definition mk_ofsi aa ws e1 :=
   if is_const e1 is Some i then Some (i * (mk_scale aa ws))%Z
   else None.
-
+*)
 Section CHECK.
 
 (* The code in this file is called twice.
@@ -708,7 +715,7 @@ Record stack_alloc_params :=
       -> assgn_tag    (* The tag present in the source. *)
       -> vptr_kind    (* The kind of address to compute. *)
       -> pexpr        (* Variable with base address. *)
-      -> Z            (* Offset. *)
+      -> pexpr        (* Offset. *)
       -> option instr_r;
     (* Build an instruction that assigns an immediate value *)
     sap_immediate : var_i -> Z -> instr_r;
@@ -784,7 +791,7 @@ Definition addr_from_vpk x (vpk:vptr_kind) :=
   | VKglob zws => ok (with_var x pmap.(vrip), zws.1)
   | VKptr pk => addr_from_pk x pk
   end.
-
+(*
 Definition mk_addr_ptr x aa ws (pk:ptr_kind) (e1:pexpr) :=
   Let xofs := addr_from_pk x pk in
   ok (xofs.1, mk_ofs aa ws e1 xofs.2).
@@ -792,7 +799,7 @@ Definition mk_addr_ptr x aa ws (pk:ptr_kind) (e1:pexpr) :=
 Definition mk_addr x aa ws (vpk:vptr_kind) (e1:pexpr) :=
   Let xofs := addr_from_vpk x vpk in
   ok (xofs.1, mk_ofs aa ws e1 xofs.2).
-
+*)
 Definition get_var_kind x :=
   let xv := x.(gv) in
   if is_glob x then
@@ -872,7 +879,7 @@ Fixpoint alloc_e (e:pexpr) ty :=
       Let: (_, status) := gget_sub_region_status rmap xv vpk in
       Let _ := check_valid xv status in
       Let: (p, ofs) := addr_from_vpk xv vpk in
-      let ofs := mk_ofs aa ws e1 ofs in
+      let ofs := add_ofs (mk_ofs aa ws e1) ofs in
 (*       Let pofs := mk_addr xv aa ws vpk e1 in *)
       ok (Pload al ws p ofs)
     end
@@ -961,7 +968,7 @@ Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
       Let rmap := set_word rmap x sr status ws in
 (*       Let pofs := mk_addr_ptr x aa ws pk e1 in *)
       Let: (p, ofs) := addr_from_pk x pk in
-      let ofs := mk_ofs aa ws e1 ofs in
+      let ofs := add_ofs (mk_ofs aa ws e1) ofs in
       let r := Lmem al ws p ofs in
       ok (rmap, r)
     end
@@ -1065,7 +1072,7 @@ Definition alloc_array_move rmap r tag e :=
       | Some vpk =>
         Let: (sr, status) := gget_sub_region_status rmap yv vpk in
         Let eofs := mk_addr_pexpr rmap yv vpk in
-        ok (sr, status, vpk, eofs.1, eofs.2)
+        ok (sr, status, vpk, eofs.1, cast_const eofs.2)
       end
     | Psub aa ws len y e1 =>
       let yv := y.(gv) in
@@ -1074,11 +1081,11 @@ Definition alloc_array_move rmap r tag e :=
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
         Let: (sr, status) := gget_sub_region_status rmap yv vpk in
-        let ofs := mk_ofs aa ws e1 0 in (* TODO: is this correct? *)
+        let ofs := mk_ofs aa ws e1 in (* TODO: is this correct? *)
         let sr := sub_region_at_ofs sr ofs (Pconst (arr_size ws len)) in
         let status := filter_status sr.(sr_zone) status in
         Let eofs := mk_addr_pexpr rmap yv vpk in
-        ok (sr, status, vpk, eofs.1, (eofs.2 + ofs)%Z)
+        ok (sr, status, vpk, eofs.1, add_ofs ofs eofs.2)
       end
     | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (y)")
     end
@@ -1126,7 +1133,7 @@ Definition alloc_array_move rmap r tag e :=
     | None   => Error (stk_ierror_basic x "register array remains")
     | Some _ =>
       Let sr := get_sub_region rmap x in
-      let ofs := mk_ofs aa ws e 0 in (* TODO: is this correct? *)
+      let ofs := mk_ofs aa ws e in (* TODO: is this correct? *)
       let sr' := sub_region_at_ofs sr ofs len in
       Let _ :=
         assert (sub_region_beq sr' sry)
@@ -1148,79 +1155,6 @@ Definition alloc_array_move rmap r tag e :=
   | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (x)")
   end.
 
-  Let xsub := get_Lvar_sub r in
-  Let ysub := get_Pvar_sub e in
-  let '(x,subx) := xsub in
-  let '(y,suby) := ysub in
-
-  Let sryl :=
-    let vy := y.(gv) in
-    Let vk := get_var_kind y in
-    let (ofs, len) :=
-      match suby with
-      | None => (0%Z, size_slot vy)
-      | Some p => p
-      end
-    in
-    match vk with
-    | None => Error (stk_ierror_basic vy "register array remains")
-    | Some vpk =>
-      Let: (_, sry, bytesy) := check_vpk rmap vy vpk (Some ofs) len in
-      Let eofs := mk_addr_pexpr rmap vy vpk in
-      ok (sry, vpk, bytesy, eofs.1, (eofs.2 + ofs)%Z)
-    end
-  in
-  let '(sry, vpk, bytesy, ey, ofs) := sryl in
-  match subx with
-  | None =>
-    match get_local (v_var x) with
-    | None    => Error (stk_ierror_basic x "register array remains")
-    | Some pk =>
-      match pk with
-      | Pdirect s _ ws zx sc =>
-        let sr := sub_region_direct s ws sc zx in
-        Let _  :=
-          assert (sr == sry)
-                 (stk_ierror x
-                    (pp_box [::
-                      pp_s "the assignment to array"; pp_var x;
-                      pp_s "cannot be turned into a nop: source and destination regions are not equal"]))
-        in
-        let rmap := Region.set_move rmap x sry bytesy in
-        ok (rmap, nop)
-      | Pregptr p =>
-        let (rmap, oir) :=
-            get_addr None rmap x (Lvar (with_var x p)) tag sry bytesy vpk ey ofs in
-        match oir with
-        | None =>
-          let err_pp := pp_box [:: pp_s "cannot compute address"; pp_var x] in
-          Error (stk_error x err_pp)
-        | Some ir =>
-          ok (rmap, ir)
-        end
-      | Pstkptr slot ofsx ws z x' =>
-        let is_spilling := Some (slot, ws, z, x') in
-        let dx_ofs := cast_const (ofsx + z.(z_ofs)) in
-        let dx := Lmem Aligned Uptr (with_var x pmap.(vrsp)) dx_ofs in
-        let (rmap, oir) := get_addr is_spilling rmap x dx tag sry bytesy vpk ey ofs in
-        match oir with
-        | None =>
-          let err_pp := pp_box [:: pp_s "cannot compute address"; pp_var x] in
-          Error (stk_error x err_pp)
-        | Some ir =>
-          ok (Region.set_stack_ptr rmap slot ws z x', ir)
-        end
-      end
-    end
-  | Some (ofs, len) =>
-    match get_local (v_var x) with
-    | None   => Error (stk_ierror_basic x "register array remains")
-    | Some _ =>
-      Let rmap := Region.set_arr_sub rmap x ofs len sry bytesy in
-      ok (rmap, nop)
-    end
-  end.
-
 Definition is_protect_ptr_fail (rs:lvals) (o:sopn) (es:pexprs) :=
   match o, rs, es with
   | Oslh (SLHprotect_ptr_fail _), [::r], [:: e; msf] => Some (r, e, msf)
@@ -1230,51 +1164,50 @@ Definition is_protect_ptr_fail (rs:lvals) (o:sopn) (es:pexprs) :=
 Definition lower_protect_ptr_fail ii lvs t es :=
   slh_lowering.lower_slho shparams ii lvs t (SLHprotect Uptr) es.
 
-(* This seems to be a duplication of alloc_array_move, but we are able to share the corresponding proofs *)
+(* This seems to be a duplication of alloc_array_move, but we are able to share
+   the corresponding proofs *)
 Definition alloc_protect_ptr rmap ii r t e msf :=
-  Let xsub := get_Lvar_sub r in
-  Let ysub := get_Pvar_sub e in
-  let '(x,subx) := xsub in
-  let '(y,suby) := ysub in
-
-   Let sryl :=
-    let vy := y.(gv) in
-    Let vk := get_var_kind y in
-    let ofs := 0%Z in
-    Let len :=
-      match suby with
-      | None => ok (size_slot vy)
-      | Some _ => Error (stk_error_no_var "argument of protect_ptr cannot be a sub array" )
-      end in
-    match vk with
-    | None => Error (stk_error_no_var "argument of protect_ptr should be a reg ptr")
-    | Some vpk =>
-      Let _ := assert (if vpk is VKptr (Pregptr _) then true else false)
-                      (stk_error_no_var "argument of protect_ptr should be a reg ptr") in
-      Let _ := assert (if r is Lvar _ then true else false)
-                      (stk_error_no_var "destination of protect_ptr should be a reg ptr") in
-      Let: (_, sry, bytesy) := check_vpk rmap vy vpk (Some ofs) len in
-      Let: (e, _ofs) := mk_addr_pexpr rmap vy vpk in (* ofs is ensured to be 0 *)
-      ok (sry, bytesy, vpk, e)
+  Let: (sry, statusy, vpk, ey) :=
+    match e with
+    | Pvar y =>
+      let yv := y.(gv) in
+      Let vk := get_var_kind y in
+      match vk with
+      | None => Error (stk_ierror_basic yv "register array remains")
+      | Some vpk =>
+        Let _ := assert (if vpk is VKptr (Pregptr _) then true else false)
+                        (stk_error_no_var "argument of protect_ptr should be a reg ptr") in
+        Let _ := assert (if r is Lvar _ then true else false)
+                        (stk_error_no_var "destination of protect_ptr should be a reg ptr") in
+        Let: (sr, status) := gget_sub_region_status rmap yv vpk in
+        Let: (e, _ofs) := mk_addr_pexpr rmap yv vpk in (* ofs is ensured to be 0 *)
+        ok (sr, status, vpk, e)
+      end
+    | Psub _ _ _ _ _ =>
+      Error (stk_error_no_var "argument of protect_ptr cannot be a sub array")
+    | _ => Error (stk_ierror_no_var "alloc_protect_ptr: variable/subarray expected (y)")
     end
   in
-  let '(sry, bytesy, vpk, ey) := sryl in
-  match subx with
-  | None =>
-    match get_local (v_var x) with
-    | None    => Error (stk_error_no_var "only reg ptr can receive the result of protect_ptr")
+
+  match r with
+  | Lvar x => 
+    match get_local x with
+    | None => Error (stk_ierror_basic x "register array remains")
     | Some pk =>
       match pk with
-      | Pregptr px =>
-        let dx := Lvar (with_var x px) in
+      | Pregptr p =>
+        let rmap := set_move rmap x sry statusy in
+        let dx := Lvar (with_var x p) in
         Let msf := add_iinfo ii (alloc_e rmap msf (sword msf_size)) in
         Let ir := lower_protect_ptr_fail ii [::dx] t [:: ey; msf] in
-        let rmap := Region.set_move rmap x sry bytesy in
         ok (rmap, ir)
       | _ => Error (stk_error_no_var "only reg ptr can receive the result of protect_ptr")
       end
     end
-  | Some _ => Error (stk_error_no_var "cannot assign protect_ptr in a sub array" )
+  | Lasub _ _ _ _ _ =>
+    Error (stk_error_no_var "cannot assign protect_ptr in a sub array")
+
+  | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (x)")
   end.
 
 (* We do not update the [var_region] part *)
@@ -1282,31 +1215,27 @@ Definition alloc_protect_ptr rmap ii r t e msf :=
 (* long-term TODO: we can avoid putting PDirect in the rmap (look in pmap instead) *)
 Definition alloc_array_move_init rmap r tag e :=
   if is_array_init e then
-    Let xsub := get_Lvar_sub r in
-    let '(x,subx) := xsub in
-    let (ofs, len) :=
-      match subx with
-      | None => (0%Z, size_slot (v_var x))
-      | Some p => p
-      end in
-    Let sr :=
-      match get_local (v_var x) with
-      | None    => Error (stk_ierror_basic x "register array remains")
-      | Some pk =>
-        match pk with
-        | Pdirect x' _ ws z sc =>
-          if sc is Slocal then
-            ok (sub_region_stack x' ws z)
-          else
-            Error (stk_error x (pp_box [:: pp_s "cannot initialize glob array"; pp_var x]))
-        | _ =>
-          get_sub_region rmap x
+    match r with
+    | Lvar x =>
+      Let sr :=
+        match get_local x with
+        | None    => Error (stk_ierror_basic x "register array remains")
+        | Some pk =>
+          match pk with
+          | Pdirect x' _ ws cs sc =>
+            if sc is Slocal then
+              ok (sub_region_stack x' ws cs)
+            else
+              Error (stk_error x (pp_box [:: pp_s "cannot initialize glob array"; pp_var x]))
+          | _ =>
+            get_sub_region rmap x
+          end
         end
-      end in
-    let sr := sub_region_at_ofs sr (Some ofs) len in
-    let bytesy := ByteSet.full (interval_of_zone sr.(sr_zone)) in
-    let rmap := Region.set_move_sub rmap x sr bytesy in
-    ok (rmap, nop )
+      in
+      let rmap := set_move rmap x sr Valid in
+      ok (rmap, nop)
+    | _ => Error (stk_ierror_no_var "arrayinit of non-variable")
+    end
   else alloc_array_move rmap r tag e.
 
 Definition bad_lval_number := stk_ierror_no_var "invalid number of lval".
