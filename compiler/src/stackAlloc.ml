@@ -24,27 +24,27 @@ let pp_slot fmt ((x, ws), ofs) =
     pp_var_ty (Conv.var_of_cvar x)
     (string_of_ws ws)
 
-let pp_zone fmt z =
+let pp_slice fmt cs =
   let open Stack_alloc in
   Format.fprintf fmt "[%a:%a]"
-    Z.pp_print (Conv.z_of_cz z.z_ofs)
-    Z.pp_print (Conv.z_of_cz z.z_len)
+    Z.pp_print (Conv.z_of_cz cs.cs_ofs)
+    Z.pp_print (Conv.z_of_cz cs.cs_len)
 
 let pp_ptr_kind_init fmt pki =
   let open Stack_alloc in
   match pki with
-  | PIdirect (v, z, sc) ->
+  | PIdirect (v, cs, sc) ->
     Format.fprintf fmt "%s %a %a"
       (if sc = Sglob then "global" else "stack")
       pp_var (Conv.var_of_cvar v)
-      pp_zone z
+      pp_slice cs
   | PIregptr v ->
     Format.fprintf fmt "reg ptr %a"
       pp_var (Conv.var_of_cvar v)
-  | PIstkptr (v, z, x) ->
+  | PIstkptr (v, cs, x) ->
     Format.fprintf fmt "stack ptr %a %a (pseudo-reg %a)"
       pp_var_ty (Conv.var_of_cvar v)
-      pp_zone z
+      pp_slice cs
       pp_var_ty (Conv.var_of_cvar x)
 
 let pp_alloc fmt (x, pki) =
@@ -124,8 +124,8 @@ let memory_analysis pp_err ~debug up =
         pp_align    = pi.pi_align.ac_strict;
       }) in
     let conv_sub (i:Interval.t) = 
-      Stack_alloc.{ z_ofs = Conv.cz_of_int i.min; 
-                    z_len = Conv.cz_of_int (Interval.size i) } in
+      Stack_alloc.{ cs_ofs = Conv.cz_of_int i.min; 
+                    cs_len = Conv.cz_of_int (Interval.size i) } in
     let conv_ptr_kind x = function
       | Varalloc.Direct (s, i, sc) -> Stack_alloc.PIdirect (Conv.cvar_of_var s, conv_sub i, sc)
       | RegPtr s                   -> Stack_alloc.PIregptr(Conv.cvar_of_var s)

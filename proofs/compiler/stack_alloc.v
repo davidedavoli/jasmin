@@ -274,12 +274,11 @@ Record region_map := {
 }.
 
 Definition empty_status_map := Mvar.empty status.
-(*
+
 Definition empty := {|
   var_region := Mvar.empty _;
   region_var := Mr.empty status_map;
 |}.
-*)
 
 Definition get_sub_region (rmap:region_map) (x:var_i) :=
   match Mvar.get rmap.(var_region) x with
@@ -603,40 +602,6 @@ Definition set_move (rmap:region_map) (x:var) sr bytesy :=
      region_var := rv |}.
 
 Definition set_arr_init rmap x sr := set_move rmap x sr.
-
-Definition incl_bytes_map (_r: region) (bm1 bm2: bytes_map) :=
-  Mvar.incl (fun x => ByteSet.subset) bm1 bm2.
-
-Definition incl (rmap1 rmap2:region_map) :=
-  Mvar.incl (fun x r1 r2 => r1 == r2) rmap1.(var_region) rmap2.(var_region) &&
-  Mr.incl incl_bytes_map rmap1.(region_var) rmap2.(region_var).
-
-Definition merge_bytes (x:var) (bytes1 bytes2: option ByteSet.t) :=
-  match bytes1, bytes2 with
-  | Some bytes1, Some bytes2 =>
-    let bytes := ByteSet.inter bytes1 bytes2 in
-    if ByteSet.is_empty bytes then None
-    else Some bytes
-  | _, _ => None
-  end.
-
-Definition merge_bytes_map (_r:region) (bm1 bm2: option bytes_map) :=
-  match bm1, bm2 with
-  | Some bm1, Some bm2 =>
-    let bm := Mvar.map2 merge_bytes bm1 bm2 in
-    if Mvar.is_empty bm then None
-    else Some bm
-  | _, _ => None
-  end.
-
-Definition merge (rmap1 rmap2:region_map) :=
-  {| var_region :=
-       Mvar.map2 (fun _ osr1 osr2 =>
-        match osr1, osr2 with
-        | Some sr1, Some sr2 => if sr1 == sr2 then osr1 else None
-        | _, _ => None
-        end) rmap1.(var_region) rmap2.(var_region);
-     region_var := Mr.map2 merge_bytes_map rmap1.(region_var) rmap2.(region_var) |}.
 *)
 End Region.
 
@@ -666,6 +631,7 @@ Definition mk_ofs aa ws e1 :=
 
 (* Do we want the optim for constants? *)
 Definition add_ofs ofs1 ofs2 :=
+  (* or is_wconst_of_size ?? *)
   match is_wconst Uptr ofs1 with
   | Some w1 => cast_const (wunsigned w1 + ofs2)
   | None => add ofs1 (cast_const ofs2)
@@ -1081,7 +1047,7 @@ Definition alloc_array_move rmap r tag e :=
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
         Let: (sr, status) := gget_sub_region_status rmap yv vpk in
-        let ofs := mk_ofs aa ws e1 in (* TODO: is this correct? *)
+        let ofs := mk_ofs aa ws e1 in
         let sr := sub_region_at_ofs sr ofs (Pconst (arr_size ws len)) in
         let status := filter_status sr.(sr_zone) status in
         Let eofs := mk_addr_pexpr rmap yv vpk in
@@ -1133,7 +1099,7 @@ Definition alloc_array_move rmap r tag e :=
     | None   => Error (stk_ierror_basic x "register array remains")
     | Some _ =>
       Let sr := get_sub_region rmap x in
-      let ofs := mk_ofs aa ws e in (* TODO: is this correct? *)
+      let ofs := mk_ofs aa ws e in
       let sr' := sub_region_at_ofs sr ofs len in
       Let _ :=
         assert (sub_region_beq sr' sry)
@@ -1244,6 +1210,48 @@ Definition alloc_lvals rmap rs tys :=
   fmapM2 bad_lval_number alloc_lval rmap rs tys.
 
 Section LOOP.
+(*
+Definition incl_status status1 status2 :=
+  match status1, status2 with
+  | Unknown, _ => true
+  | _, Valid => true
+  | Borrowed zs1, Borrowed zs2 => all (fun z => has (incl_zones z) zs1) zs2
+  | _, _ => false
+  end.
+
+Definition incl_bytes_map (_r: region) (bm1 bm2: bytes_map) :=
+  Mvar.incl (fun x => ByteSet.subset) bm1 bm2.
+
+Definition incl (rmap1 rmap2:region_map) :=
+  Mvar.incl (fun x r1 r2 => r1 == r2) rmap1.(var_region) rmap2.(var_region) &&
+  Mr.incl incl_bytes_map rmap1.(region_var) rmap2.(region_var).
+
+Definition merge_bytes (x:var) (bytes1 bytes2: option ByteSet.t) :=
+  match bytes1, bytes2 with
+  | Some bytes1, Some bytes2 =>
+    let bytes := ByteSet.inter bytes1 bytes2 in
+    if ByteSet.is_empty bytes then None
+    else Some bytes
+  | _, _ => None
+  end.
+
+Definition merge_bytes_map (_r:region) (bm1 bm2: option bytes_map) :=
+  match bm1, bm2 with
+  | Some bm1, Some bm2 =>
+    let bm := Mvar.map2 merge_bytes bm1 bm2 in
+    if Mvar.is_empty bm then None
+    else Some bm
+  | _, _ => None
+  end.
+
+Definition merge (rmap1 rmap2:region_map) :=
+  {| var_region :=
+       Mvar.map2 (fun _ osr1 osr2 =>
+        match osr1, osr2 with
+        | Some sr1, Some sr2 => if sr1 == sr2 then osr1 else None
+        | _, _ => None
+        end) rmap1.(var_region) rmap2.(var_region);
+     region_var := Mr.map2 merge_bytes_map rmap1.(region_var) rmap2.(region_var) |}.
 
  Variable ii:instr_info.
 
@@ -1257,7 +1265,7 @@ Section LOOP.
       if incl m m'.1.2 then ok (m'.1.1, m'.2)
       else loop2 n (merge m m'.1.2)
     end.
-
+*)
 End LOOP.
 
 Record stk_alloc_oracle_t :=
@@ -1296,22 +1304,18 @@ Definition get_Pvar e :=
    but there are probably better ideas.
    TODO: factorize [set_clear_bytes] and [set_pure_bytes] ?
 *)
-Definition set_clear_bytes rv sr ofs len :=
-  let z     := sr.(sr_zone) in
-  let z1    := sub_zone_at_ofs z ofs len in
-  let i     := interval_of_zone z1 in
-  let bm    := get_bytes_map sr.(sr_region) rv in
-  (* clear all bytes corresponding to z1 *)
-  let bm := clear_bytes_map i bm in
-  Mr.set rv sr.(sr_region) bm.
+Definition set_clear_status rv sr :=
+  let sm := get_status_map sr.(sr_region) rv in
+  let sm := clear_status_map sr.(sr_zone) sm in
+  Mr.set rv sr.(sr_region) sm.
 
-Definition set_clear_pure rmap sr ofs len :=
+Definition set_clear_pure rmap sr :=
   {| var_region := rmap.(var_region);
-     region_var := set_clear_bytes rmap sr ofs len |}.
+     region_var := set_clear_status rmap sr |}.
 
-Definition set_clear rmap x sr ofs len :=
+Definition set_clear rmap x sr :=
   Let _ := writable x sr.(sr_region) in
-  ok (set_clear_pure rmap sr ofs len).
+  ok (set_clear_pure rmap sr).
 
 (* We clear the arguments. This is not necessary in the classic case, because
    we also clear them when assigning the results in alloc_call_res
@@ -1345,12 +1349,12 @@ Definition alloc_call_arg_aux rmap0 rmap (sao_param: option param_info) (e:pexpr
     ok (rmap, (None, Pvar x))
   | None, Some _ => Error (stk_ierror_basic xv "argument not a reg")
   | Some pi, Some (Pregptr p) =>
-    Let: (sr, sr', bytes) := Region.get_sub_region_bytes rmap0 xv (Some 0%Z) (size_slot xv) in
-    Let _ := Region.check_valid xv sr' bytes in
+    Let: (sr, status) := get_sub_region_status rmap0 xv in
+    Let _ := check_valid xv status in
     Let _  := check_align Aligned xv sr pi.(pp_align) in
     Let rmap :=
       if pi.(pp_writable) then
-        set_clear rmap xv sr (Some 0%Z) (size_slot xv)
+        set_clear rmap xv sr
       else ok rmap
     in
     ok (rmap, (Some (pi.(pp_writable),sr), Pvar (mk_lvar (with_var xv p))))
@@ -1359,6 +1363,17 @@ Definition alloc_call_arg_aux rmap0 rmap (sao_param: option param_info) (e:pexpr
 
 Definition alloc_call_args_aux rmap sao_params es :=
   fmapM2 (stk_ierror_no_var "bad params info") (alloc_call_arg_aux rmap) rmap sao_params es.
+
+Fixpoint disjoint_zones z1 z2 : bool :=
+  match z1, z2 with
+  | [::], _ | _, [::] => false
+  | s1 :: z1, s2 :: z2 =>
+    if symbolic_slice_beq s1 s2 then disjoint_zones z1 z2
+    else if odflt false (symbolic_slice_ble s1 s2) then true
+    else if odflt false (symbolic_slice_ble s2 s1) then true
+    else (* not disjoint (or at least it was not proved) *)
+      false
+  end.
 
 Definition disj_sub_regions sr1 sr2 :=
   ~~(region_same sr1.(sr_region) sr2.(sr_region)) ||
@@ -1415,7 +1430,7 @@ Definition alloc_lval_call (srs:seq (option (bool * sub_region) * pexpr)) rmap (
       | Lnone i _ => ok (rmap, Lnone i (sword Uptr))
       | Lvar x =>
         Let p := get_regptr x in
-        Let rmap := Region.set_arr_call rmap x sr in
+        Let rmap := set_word rmap x sr Valid U32 in (* FIXME: no align check *)
         (* TODO: Lvar p or Lvar (with_var x p) like in alloc_call_arg? *)
         ok (rmap, Lvar p)
       | Laset _ aa ws x e1 => Error (stk_ierror_basic x "array assignement in lval of a call")
@@ -1472,7 +1487,7 @@ Definition alloc_syscall ii rmap rs o es :=
       Let p  := get_regptr xe in
       Let xp := get_regptr x in
       Let sr := get_sub_region rmap xe in
-      Let rmap := set_sub_region rmap x sr (Some 0%Z) (Zpos len) in
+      Let rmap := set_word rmap x sr Valid U32 in (* FIXME *)
       ok (rmap,
           [:: MkI ii (sap_immediate saparams xlen (Zpos len));
               MkI ii (Csyscall [::Lvar xp] o [:: Plvar p; Plvar xlen])])
@@ -1492,12 +1507,12 @@ Definition alloc_array_swap rmap rs t es :=
   | [:: Lvar x; Lvar y], [::Pvar z'; Pvar w'] =>
     let z := z'.(gv) in
     Let pz  := get_regptr z in
-    Let: (_, srz, bytesz) := get_sub_region_bytes rmap z (Some 0%Z) (size_of z.(vtype)) in
+    Let: (srz, statusz) := get_sub_region_status rmap z in
     let w := w'.(gv) in
     Let pw := get_regptr w in
-    Let: (_, srw, bytesw) := get_sub_region_bytes rmap w (Some 0%Z) (size_of w.(vtype)) in
-    let rmap := Region.set_move rmap x srw bytesw in
-    let rmap := Region.set_move rmap y srz bytesz in
+    Let: (srw, statusw) := get_sub_region_status rmap w in
+    let rmap := set_move rmap x srw statusw in
+    let rmap := set_move rmap y srz statusz in
     Let px := get_regptr x in
     Let py := get_regptr y in
     Let _ := assert ((is_lvar z') && (is_lvar w'))
@@ -1537,13 +1552,15 @@ Fixpoint alloc_i sao (rmap:region_map) (i: instr) : cexec (region_map * cmd) :=
       alloc_syscall ii rmap rs o es
 
     | Cif e c1 c2 =>
+      Error (stk_error_no_var "if not supported") (*
       Let e := add_iinfo ii (alloc_e rmap e sbool) in
       Let c1 := fmapM (alloc_i sao) rmap c1 in
       Let c2 := fmapM (alloc_i sao) rmap c2 in
       let rmap:= merge c1.1 c2.1 in
-      ok (rmap, [:: MkI ii (Cif e (flatten c1.2) (flatten c2.2))])
+      ok (rmap, [:: MkI ii (Cif e (flatten c1.2) (flatten c2.2))]) *)
 
     | Cwhile a c1 e c2 =>
+      Error (stk_error_no_var "while not supported") (*
       let check_c rmap :=
         Let c1 := fmapM (alloc_i sao) rmap c1 in
         let rmap1 := c1.1 in
@@ -1551,7 +1568,7 @@ Fixpoint alloc_i sao (rmap:region_map) (i: instr) : cexec (region_map * cmd) :=
         Let c2 := fmapM (alloc_i sao) rmap1 c2 in
         ok ((rmap1, c2.1), (e, (c1.2, c2.2))) in
       Let r := loop2 ii check_c Loop.nb rmap in
-      ok (r.1, [:: MkI ii (Cwhile a (flatten r.2.2.1) r.2.1 (flatten r.2.2.2))])
+      ok (r.1, [:: MkI ii (Cwhile a (flatten r.2.2.1) r.2.1 (flatten r.2.2.2))]) *)
 
     | Ccall rs fn es =>
       Let ri := add_iinfo ii (alloc_call sao rmap rs fn es) in
@@ -1597,25 +1614,24 @@ Definition add_alloc globals stack (xpk:var * ptr_kind_init) (lrx: Mvar.t ptr_ki
   else
     Let svrmap :=
       match pk with
-      | PIdirect x' z sc =>
+      | PIdirect x' cs sc =>
         let vars := if sc is Slocal then stack else globals in
         match Mvar.get vars x' with
         | None => Error (stk_ierror_no_var "unknown region")
         | Some (ofs', ws') =>
-          if [&& (size_slot x <= z.(z_len))%CMP, (0%Z <= z.(z_ofs))%CMP &
-                 ((z.(z_ofs) + z.(z_len))%Z <= size_slot x')%CMP] then
+          if [&& (size_slot x <= cs.(cs_len))%CMP, (0%Z <= cs.(cs_ofs))%CMP &
+                 ((cs.(cs_ofs) + cs.(cs_len))%Z <= size_slot x')%CMP] then
             let rmap :=
               if sc is Slocal then
-                let sr := sub_region_stack x' ws' z in
-                let bytes := ByteSet.full (interval_of_zone sr.(sr_zone)) in
-                Region.set_arr_init rmap x sr bytes
+                let sr := sub_region_stack x' ws' cs in
+                set_move rmap x sr Valid
               else
                 rmap
             in
-            ok (sv, Pdirect x' ofs' ws' z sc, rmap)
+            ok (sv, Pdirect x' ofs' ws' cs sc, rmap)
           else Error (stk_ierror_no_var "invalid slot")
         end
-      | PIstkptr x' z xp =>
+      | PIstkptr x' cs xp =>
         if ~~ is_sarr x.(vtype) then
           Error (stk_ierror_no_var "a stk ptr variable must be an array")
         else
@@ -1627,11 +1643,11 @@ Definition add_alloc globals stack (xpk:var * ptr_kind_init) (lrx: Mvar.t ptr_ki
           else if Mvar.get locals xp is Some _ then Error (stk_ierror_no_var "a pseudo-var is equal to a program var")
           else
             if [&& (Uptr <= ws')%CMP,
-                (0%Z <= z.(z_ofs))%CMP,
-                (Z.land z.(z_ofs) (wsize_size Uptr - 1) == 0)%Z,
-                (wsize_size Uptr <= z.(z_len))%CMP &
-                ((z.(z_ofs) + z.(z_len))%Z <= size_slot x')%CMP] then
-              ok (Sv.add xp sv, Pstkptr x' ofs' ws' z xp, rmap)
+                (0%Z <= cs.(cs_ofs))%CMP,
+                (Z.land cs.(cs_ofs) (wsize_size Uptr - 1) == 0)%Z,
+                (wsize_size Uptr <= cs.(cs_len))%CMP &
+                ((cs.(cs_ofs) + cs.(cs_len))%Z <= size_slot x')%CMP] then
+              ok (Sv.add xp sv, Pstkptr x' ofs' ws' cs xp, rmap)
           else Error (stk_ierror_no_var "invalid ptr kind")
         end
       | PIregptr p =>
@@ -1651,7 +1667,7 @@ Definition init_local_map vrip vrsp vxlen globals stack sao :=
   Let _ := assert (vxlen != vrip) (stk_ierror_no_var "two fresh variables are equal") in
   Let _ := assert (vxlen != vrsp) (stk_ierror_no_var "two fresh variables are equal") in
   let sv := Sv.add vxlen (Sv.add vrip (Sv.add vrsp Sv.empty)) in
-  Let aux := foldM (add_alloc globals stack) (Mvar.empty _, Region.empty, sv) sao.(sao_alloc) in
+  Let aux := foldM (add_alloc globals stack) (Mvar.empty _, empty, sv) sao.(sao_alloc) in
   let '(locals, rmap, sv) := aux in
   ok (locals, rmap, sv).
 
@@ -1681,9 +1697,9 @@ Definition check_result pmap rmap paramsi params oi (x:var_i) :=
     | Some sr_param =>
       Let _ := assert (x.(vtype) == (nth x params i).(vtype))
                       (stk_ierror_no_var "reg ptr in result not corresponding to a parameter") in
-      Let: (sr, sr', bytes) := get_sub_region_bytes rmap x (Some 0%Z) (size_slot x) in
-      Let _ := check_valid x sr' bytes in
-      Let _  := assert (sr_param == sr) (stk_ierror_no_var "invalid reg ptr in result") in
+      Let: (sr, status) := get_sub_region_status rmap x in
+      Let _ := check_valid x status in
+      Let _  := assert (sub_region_beq sr_param sr) (stk_ierror_no_var "invalid reg ptr in result") in
       Let p  := get_regptr pmap x in
       ok p
     | None => Error (stk_ierror_no_var "invalid function info")
@@ -1729,10 +1745,9 @@ Definition init_param (mglob stack : Mvar.t (Z * wsize)) accu pi (x:var_i) :=
       {| r_slot := x;
          r_align := pi.(pp_align); r_writable := pi.(pp_writable) |} in
     let sr := sub_region_full x r in
-    let bytes := ByteSet.full (interval_of_zone sr.(sr_zone)) in
     ok (Sv.add pi.(pp_ptr) disj,
         Mvar.set lmap x (Pregptr pi.(pp_ptr)),
-        set_move rmap x sr bytes,
+        set_move rmap x sr Valid,
         (Some sr, with_var x pi.(pp_ptr)))
   end.
 
