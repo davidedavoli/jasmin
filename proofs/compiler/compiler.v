@@ -185,6 +185,7 @@ Record compiler_params
   fresh_var_ident  : v_kind -> instr_info -> int -> string -> stype -> Ident.ident;
   slh_info         : _uprog → funname → seq slh_t * seq slh_t;
   stack_zero_info  : funname -> option (stack_zero_strategy * option wsize);
+  print_rmap       : instr_info -> Region.region_map -> Region.region_map;
 }.
 
 Context
@@ -382,6 +383,7 @@ Definition compiler_front_end (entries: seq funname) (p: prog) : cexec sprog :=
   Let _ := check_wf_ptr entries p ao.(ao_stack_alloc) in
   Let ps :=
     stack_alloc.alloc_prog
+      (print_rmap cparams)
       true
       shparams
       saparams

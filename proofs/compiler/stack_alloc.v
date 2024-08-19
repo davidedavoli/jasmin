@@ -643,6 +643,8 @@ Definition mk_ofsi aa ws e1 :=
 *)
 Section CHECK.
 
+Context (print_rmap : instr_info -> region_map -> region_map).
+
 (* The code in this file is called twice.
    - First, it is called from the stack alloc OCaml oracle. Indeed, the oracle
      returns initial results, and performs stack and reg allocation using
@@ -1524,7 +1526,7 @@ Definition alloc_array_swap rmap rs t es :=
 
 Fixpoint alloc_i sao (rmap:region_map) (i: instr) : cexec (region_map * cmd) :=
   let (ii, ir) := i in
-
+  Let: (rmap, c) :=
     match ir with
     | Cassgn r t ty e =>
       if is_sarr ty then
@@ -1576,7 +1578,9 @@ Fixpoint alloc_i sao (rmap:region_map) (i: instr) : cexec (region_map * cmd) :=
 
     | Cfor _ _ _  => Error (pp_at_ii ii (stk_ierror_no_var "don't deal with for loop"))
 
-    end.
+    end
+    in
+    ok (print_rmap ii rmap, c).
 
 End PROG.
 
