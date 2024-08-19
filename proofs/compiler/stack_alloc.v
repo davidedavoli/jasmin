@@ -334,17 +334,18 @@ Fixpoint filter_tree (z : symbolic_zone) (tree : symbolic_tree) : option symboli
 *)
 
 (* When no branch match, we could call tree_of_zone instead *)
-Fixpoint get_subtree z (l : seq symbolic_tree) : seq symbolic_tree :=
+Fixpoint get_subtree z (l : seq symbolic_tree) : option (seq symbolic_tree) :=
   match z with
-  | [::] => l
+  | [::] => Some l
   | s :: z =>
-    let l :=
+    let%opt l :=
       match List.find (fun '(Node s' l) => symbolic_slice_beq s s') l with
-      | Some (Node s' l) => l
-      | None => [::]
+      | Some (Node s' l) => Some l
+      | None => None
       end
     in
-    [:: Node s (get_subtree z l)]
+    let%opt l := get_subtree z l in
+    Some [:: Node s l]
   end.
 
 (* FIXME: argument: symbolic_zone or sub_region? *)
@@ -354,8 +355,8 @@ Definition filter_status (z:symbolic_zone) (status:status) :=
   | Unknown => Unknown
   | Borrowed l =>
     match get_subtree z l with
-    | [::] => Valid
-    | l => Borrowed l
+    | None => Valid
+    | Some l => Borrowed l
     end
   end.
 (*
@@ -458,6 +459,7 @@ Definition tree : symbolic_tree :=
     [:: Node {| ss_ofs := Pconst 1; ss_len := Pconst 1 |} [::];
         Node {| ss_ofs := Pconst 8; ss_len := Pconst 1 |} [::] ].
 Eval compute in insert_zone z [::tree].
+Eval compute in filter_status z (Borrowed [::tree]).
 *)
 
 Definition clear_status z status :=
