@@ -70,6 +70,10 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
 
   let translate_var = Conv.var_of_cvar in
 
+  let string_of_sr sr =
+    Format.asprintf "%a" Pp_stack_alloc.pp_sub_region sr
+  in
+
   let print_rmap ii rmap =
     let open Pp_stack_alloc in
     let pp_ii fmt ii =
@@ -86,6 +90,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
 
   let memory_analysis up : Compiler.stack_alloc_oracles =
     StackAlloc.memory_analysis
+      string_of_sr
       print_rmap
       (Printer.pp_err ~debug:!debug)
       ~debug:!debug up
@@ -297,6 +302,7 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
       Compiler.slh_info;
       Compiler.stack_zero_info = szs_of_fn;
       Compiler.print_rmap;
+      Compiler.string_of_sr;
     }
   in
 

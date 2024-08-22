@@ -249,7 +249,7 @@ Inductive symbolic_forest :=
 | Nodes : seq (symbolic_slice * symbolic_forest) -> symbolic_forest.
 
 (* empty forest *)
-Definition emptyf := Nodes [::].
+Notation emptyf := (Nodes [::]).
 
 (* TODO: it seems everything could be Borrowed
    Valid == Borrowed [::]
@@ -299,16 +299,29 @@ Definition get_var_status rv r x :=
   let sm := get_status_map rv r in
   get_status sm x.
 
+Fixpoint split z :=
+  match z with
+  | [::] => ([::], {| ss_ofs := Pconst 0; ss_len := Pconst 0 |}) (* impossible *)
+  | [::s] => ([::], s)
+  | s :: z =>
+    let: (z, last) := split z in
+    (s :: z, last)
+  end.
+
 (* Returns the sub-zone of [z] starting at offset [ofs] and of length [len].
    There is a special case if we access the full sub-region. In that case, [z]
    is returned.
 *)
 Definition sub_zone_at_ofs (z:symbolic_zone) ofs len :=
   (* TODO: z is never nil, but check this *)
-  let sl := last {| ss_ofs := Pconst 0; ss_len := Pconst 0 |} z in
-  if eq_expr ofs (Pconst 0) && eq_expr len sl.(ss_len) then z
+  let: (z', s) := split z in
+  if eq_expr ofs (Pconst 0) && eq_expr len s.(ss_len) then z
   else
-    z ++ [:: {| ss_ofs := ofs; ss_len := len |}].
+    match is_const s.(ss_ofs), is_const s.(ss_len), is_const ofs, is_const len with
+    | Some sofs, Some slen, Some ofs, Some len => z' ++ [:: {| ss_ofs := Pconst (sofs + ofs); ss_len := len |}]
+    | _, _, _, _ =>
+      z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
+    end.
 
 Definition sub_region_at_ofs sr ofs len :=
   {| sr_region := sr.(sr_region);
@@ -376,51 +389,25 @@ Definition symbolic_slice_ble (s1 s2 : symbolic_slice) :=
   let%opt ofs2 := is_const s2.(ss_ofs) in
   Some (ofs1 + len1 <=? ofs2)%Z.
 
-(* should probably return option symbolic_forest to distinguish between
-   Valid and Unknown *)
-Fixpoint insert_sub_forest (f : symbolic_forest) z subf : symbolic_forest :=
-  match z with
-  | [::] => subf
-  | s :: z =>
-    let fix aux l :=
-      match l with
-      | [::] => Some [:: (s, insert_sub_forest emptyf z subf)]
-      | ((s', f') as tree) :: l' =>
-        if symbolic_slice_beq s s' then
-          Some ((s, insert_sub_forest f' z subf) :: l')
-        else if odflt false (symbolic_slice_ble s s') then
-          Some ((s, insert_sub_forest emptyf z subf) :: l)
-        else if odflt false (symbolic_slice_ble s' s) then
-          let%opt l' := aux l' in
-          Some (tree :: l')
-        else (* not disjoint (or at least it was not proved) *)
-          None
-      end
-    in
-    let: Nodes l := f in
-    let l := odflt [::] (aux l) in
-    Nodes l
-  end.
-
-Fixpoint insert_sub_forest2 (f : symbolic_forest) z subf : option symbolic_forest :=
+Fixpoint insert_sub_forest (f : symbolic_forest) z subf : option symbolic_forest :=
   match z with
   | [::] => subf
   | s :: z =>
     let fix aux l :=
       match l with
       | [::] =>
-        match insert_sub_forest2 emptyf z subf with
+        match insert_sub_forest emptyf z subf with
         | None => Some [::]
         | Some f => Some [:: (s, f)]
         end
       | ((s', f') as tree) :: l' =>
         if symbolic_slice_beq s s' then
-          match insert_sub_forest2 f' z subf with
+          match insert_sub_forest f' z subf with
           | None => Some l'
           | Some f => Some ((s, f) :: l')
           end
         else if odflt false (symbolic_slice_ble s s') then
-          match insert_sub_forest2 emptyf z subf with
+          match insert_sub_forest emptyf z subf with
           | None => Some l
           | Some f => Some ((s, f) :: l)
           end
@@ -432,14 +419,69 @@ Fixpoint insert_sub_forest2 (f : symbolic_forest) z subf : option symbolic_fores
       end
     in
     let: Nodes l := f in
-    match aux l with
-    | None => Some (Nodes [::])
-    | Some [::] => None
-    | Some f => Some (Nodes f)
-    end
+    omap Nodes (aux l)
   end.
 
+Fixpoint init_forest (z : symbolic_zone) (f : symbolic_forest) :=
+  match z with
+  | [::] => f
+  | s :: z => Nodes [:: (s, init_forest z f)]
+  end.
 
+Fixpoint insert_sub_forest2 (f : symbolic_forest) z (subf : option symbolic_forest) : option symbolic_forest :=
+  match z with
+  | [::] => subf
+  | s :: z =>
+    let: Nodes l := f in
+    if l is [::] then Some f
+    else
+      let fix aux (l:seq (symbolic_slice * symbolic_forest)) :=
+        match l with
+        | [::] =>
+          match subf with
+          | None => Some [::]
+          | Some subf => Some [:: (s, init_forest z subf)]
+          end
+        | ((s', f') as tree) :: l' =>
+          if symbolic_slice_beq s s' then
+            match insert_sub_forest2 f' z subf with
+            | None => Some l'
+            | Some f => Some ((s, f) :: l')
+            end
+          else if odflt false (symbolic_slice_ble s s') then
+            match subf with
+            | None => Some l
+            | Some subf => Some ((s, init_forest z subf) :: l)
+            end
+          else if odflt false (symbolic_slice_ble s' s) then
+            let%opt l' := aux l' in
+            Some (tree :: l')
+          else (* not disjoint (or at least it was not proved) *)
+            None
+        end
+      in
+      match aux l with
+      | None => Some emptyf
+      | Some [::] => None
+      | Some l => Some (Nodes l)
+      end
+  end.
+(* pour la récursion interne:
+    si la liste est vide : elle reste vide
+    si la liste contient des choses disjointes : on ajoute
+    - si on est None : on retire et on renvoie None
+    si la liste contient s : on remplace et on appelle récursivement
+    - si on est None : on retire et on renvoie None
+    sinon, on est potentiellement non disjoint : on passe à liste vide
+*)
+
+Definition insert_sub_forest3 (f : option symbolic_forest) z (subf : option symbolic_forest) : option symbolic_forest :=
+  match f with
+  | None => omap (init_forest z) subf
+  | Some f => insert_sub_forest2 f z subf
+  end.
+
+(*
 Definition z : symbolic_zone :=
   [:: {| ss_ofs := Pconst 0; ss_len := Pconst 10 |};
       {| ss_ofs := Pconst 1; ss_len := Pconst 1 |};
@@ -447,46 +489,62 @@ Definition z : symbolic_zone :=
 Definition f : symbolic_forest :=
   Nodes [:: ({| ss_ofs := Pconst 0; ss_len := Pconst 10 |},
     Nodes [:: ({| ss_ofs := Pconst 1; ss_len := Pconst 1 |}, Nodes [::({| ss_ofs := Pconst 0; ss_len := Pconst 1 |}, emptyf)]);
-              ({| ss_ofs := Pconst 8; ss_len := Pconst 1 |}, Nodes [::]) ])].
+              ({| ss_ofs := Pconst 8; ss_len := Pconst 1 |}, emptyf) ])].
+Eval compute in insert_sub_forest3 (Some emptyf) [::] (Some emptyf).
 Eval compute in insert_sub_forest2 f z None.
-Eval compute in filter_status z (Borrowed [::tree]).
+(* Eval compute in filter_status z (Borrowed [::tree]). *)
+*)
 
-
-Fixpoint get_suffix (z1 z2 : symbolic_zone) : option symbolic_zone :=
+(* None => non-disjoint zones, error
+   Some None => disjoint zones
+   Some z => suffix *)
+Fixpoint get_suffix (z1 z2 : symbolic_zone) : option (option symbolic_zone) :=
   match z1 with
-  | [::] => Some z2
+  | [::] => Some (Some z2)
   | s1 :: z1 =>
     match z2 with
     | [::] => None
     | s2 :: z2 =>
-      if symbolic_slice_beq s1 s2 then get_suffix z1 z2 else None
+      if symbolic_slice_beq s1 s2 then get_suffix z1 z2
+      else if odflt false (symbolic_slice_ble s1 s2) then Some None
+      else if odflt false (symbolic_slice_ble s2 s1) then Some None
+      else
+        match is_const s1.(ss_ofs), is_const s1.(ss_len), is_const s2.(ss_ofs), is_const s2.(ss_len) with
+        | Some ofs1, Some len1, Some ofs2, Some len2 =>
+          let ofs := Z.max ofs1 ofs2 in
+          let len := (Z.min (ofs1 + len1) (ofs2 + len2) - ofs)%Z in
+          (* TODO: if this is the full zone, we could return None *)
+          Some (Some [:: {| ss_ofs := ofs; ss_len := len |}])
+        | _, _, _, _ => None
+        end
     end
   end.
 
 Definition insert_status rmap z x status subf :=
-  let z :=
+  let%opt z :=
     let%opt sr := Mvar.get rmap.(var_region) x in
     get_suffix sr.(sr_zone) z
   in
   match z with
   | None => Some status
   | Some z =>
-    let%opt f :=
+    let f :=
       match status with
-      | Valid => Some emptyf
-      | Unknown => None
+      | Valid => None
+      | Unknown => Some emptyf
       | Borrowed f => Some f
       end
     in
-    let f := insert_sub_forest f z subf in
+    let f := insert_sub_forest3 f z subf in
     match f with
-    | Nodes [::] => None (* unknown *)
-    | _ => Some (Borrowed f)
+    | None => Some Valid
+    | Some emptyf => None (* Unknown *)
+    | Some f => Some (Borrowed f)
     end
   end.
 
 (* Clearing is equivalent to inserting empty. *)
-Definition clear_status rmap z x status := insert_status rmap z x status emptyf.
+Definition clear_status rmap z x status := insert_status rmap z x status (Some emptyf).
 
 Definition clear_status_map rmap z (sm:status_map) :=
   Mvar.filter_map (clear_status rmap z) sm.
@@ -508,11 +566,18 @@ Definition set_clear rmap x sr :=
   Let _ := writable x sr.(sr_region) in
   ok (set_clear_pure rmap sr).
 
+(* We don't put Unknown in the map, we just remove it from the map. *)
+Definition set_status sm x status :=
+  match status with
+  | Unknown => Mvar.remove sm x
+  | _ => Mvar.set sm x status
+  end.
+
 (* word : clear + move *)
 Definition set_word_status (rmap:region_map) sr x status :=
   let sm := get_status_map rmap sr.(sr_region) in
   let sm := clear_status_map rmap sr.(sr_zone) sm in
-  let sm := Mvar.set sm x status in
+  let sm := set_status sm x status in
   Mr.set rmap sr.(sr_region) sm.
 
 (*
@@ -566,15 +631,18 @@ Definition set_move (rmap:region_map) x sr status :=
 Definition set_move_sub_status rmap sr x status substatus :=
   let f :=
     match substatus with
-    | Valid => emptyf
-    | Unknown => emptyf (* wrong value *)
-    | Borrowed l => l
+    | Valid => None
+    | Unknown => Some emptyf
+    | Borrowed l => Some l
     end
   in
-  insert_status rmap sr x status f.
+  let status := odflt Unknown (insert_status rmap sr.(sr_zone) x status f) in
+  let sm := get_status_map rmap sr.(sr_region) in
+  let sm := Mvar.set sm x status in
+  Mr.set rmap sr.(sr_region) sm.
 
-Definition set_move_sub (rmap:region_map) sr x status :=
-  let rv := set_move_sub_status rmap x sr status in
+Definition set_move_sub (rmap:region_map) sr x status substatus :=
+  let rv := set_move_sub_status rmap sr x status substatus in
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
@@ -584,9 +652,6 @@ Definition set_stack_ptr (rmap:region_map) s ws cs (x':var) :=
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
-(* TODO: since get_var_status can fail, we have to return an error
-   so we emit an error here, if get_var_status is changed back to no fail,
-   this could be changed *)
 Definition check_stack_ptr rmap s ws cs x' :=
   let sr := sub_region_stkptr s ws cs in
   let status := get_var_status rmap sr.(sr_region) x' in
@@ -661,6 +726,8 @@ Context
   {msfsz : MSFsize}
   {asmop : asmOp asm_op}
 .
+
+Context (string_of_sr : sub_region -> string).
 
 Definition mul := Papp2 (Omul (Op_w Uptr)).
 Definition add := Papp2 (Oadd (Op_w Uptr)).
@@ -1129,9 +1196,9 @@ Definition alloc_array_move rmap r tag e :=
                     (pp_box [::
                       pp_s "the assignment to array"; pp_var x;
                       pp_s "cannot be turned into a nop: source (";
-(*                       pp_s (string_of_sr sry); *)
+                      pp_s (string_of_sr sry);
                       pp_s ") and destination (";
-(*                       pp_s (string_of_sr sr); *)
+                      pp_s (string_of_sr sr);
                       pp_s ") regions are not equal"]))
         in
         let rmap := set_move rmap x sry statusy in (* TODO: we always do set_move -> factorize *)
@@ -1142,6 +1209,7 @@ Definition alloc_array_move rmap r tag e :=
         ok (rmap, ir)
       | Pstkptr slot ofsx ws cs x' =>
         if is_nop rmap x sry slot ws cs x' then
+          let rmap := set_move rmap x sry statusy in (* TODO: we always do set_move -> factorize *)
           ok (rmap, nop)
         else
           let rmap := set_move rmap x sry statusy in (* TODO: we always do set_move -> factorize *)
@@ -1158,7 +1226,7 @@ Definition alloc_array_move rmap r tag e :=
     | Some _ =>
       Let: (sr, status) := get_sub_region_status rmap x in
       let ofs := mk_ofs_int aa ws e in
-      let sr' := sub_region_at_ofs sr ofs len in
+      let sr' := sub_region_at_ofs sr ofs (Pconst (arr_size ws len)) in
       Let _ :=
         assert (sub_region_beq sr' sry)
                (stk_ierror x
@@ -1166,13 +1234,13 @@ Definition alloc_array_move rmap r tag e :=
                    pp_s "the assignment to sub-array"; pp_var x;
                    pp_s "cannot be turned into a nop: source (";
                    pp_vbox [::
-(*                    pp_s (string_of_sr sr_from); *)
-                   pp_s ") and destination ("
-(*                    pp_s (string_of_sr sr') *)
+                   pp_s (string_of_sr sry);
+                   pp_s ") and destination (";
+                   pp_s (string_of_sr sr')
                    ];
                    pp_s ") regions are not equal"]))
       in
-      let rmap := set_move_sub rmap sr'.(sr_zone) x status statusy in
+      let rmap := set_move_sub rmap sr' x status statusy in
       ok (rmap, nop)
     end
 
@@ -1283,20 +1351,29 @@ Definition incl_bytes_map (_r: region) (bm1 bm2: bytes_map) :=
 Definition incl (rmap1 rmap2:region_map) :=
   Mvar.incl (fun x r1 r2 => r1 == r2) rmap1.(var_region) rmap2.(var_region) &&
   Mr.incl incl_bytes_map rmap1.(region_var) rmap2.(region_var).
+*)
 
-Definition merge_bytes (x:var) (bytes1 bytes2: option ByteSet.t) :=
-  match bytes1, bytes2 with
-  | Some bytes1, Some bytes2 =>
-    let bytes := ByteSet.inter bytes1 bytes2 in
-    if ByteSet.is_empty bytes then None
-    else Some bytes
-  | _, _ => None
+Definition merge_forest (f1 f2 : symbolic_forest) :=
+  let: Nodes l1 := f1 in
+  foldl (fun acc '(s, f) =>
+    let%opt acc := acc in
+    insert_sub_forest2 acc [:: s] (Some f)) (Some f2) l1.
+
+Definition merge_status (_x:var) (status1 status2: option status) :=
+  let%opt status1 := status1 in
+  let%opt status2 := status2 in
+  match status1, status2 with
+  | Unknown, _ | _, Unknown => None
+  | Valid, s | s, Valid => Some s
+  | Borrowed f1, Borrowed f2 =>
+    let%opt f := merge_forest f1 f2 in
+    Some (Borrowed f)
   end.
 
-Definition merge_bytes_map (_r:region) (bm1 bm2: option bytes_map) :=
+Definition merge_status_map (_r:region) (bm1 bm2: option status_map) :=
   match bm1, bm2 with
   | Some bm1, Some bm2 =>
-    let bm := Mvar.map2 merge_bytes bm1 bm2 in
+    let bm := Mvar.map2 merge_status bm1 bm2 in
     if Mvar.is_empty bm then None
     else Some bm
   | _, _ => None
@@ -1306,11 +1383,11 @@ Definition merge (rmap1 rmap2:region_map) :=
   {| var_region :=
        Mvar.map2 (fun _ osr1 osr2 =>
         match osr1, osr2 with
-        | Some sr1, Some sr2 => if sr1 == sr2 then osr1 else None
+        | Some sr1, Some sr2 => if sub_region_beq sr1 sr2 then osr1 else None
         | _, _ => None
         end) rmap1.(var_region) rmap2.(var_region);
-     region_var := Mr.map2 merge_bytes_map rmap1.(region_var) rmap2.(region_var) |}.
-
+     region_var := Mr.map2 merge_status_map rmap1.(region_var) rmap2.(region_var) |}.
+(*
  Variable ii:instr_info.
 
  Variable check_c2 : region_map -> cexec ((region_map * region_map) * (pexpr * (seq cmd * seq cmd)) ).
@@ -1471,7 +1548,7 @@ Definition alloc_lval_call (srs:seq (option (bool * sub_region) * pexpr)) rmap (
       | Lnone i _ => ok (rmap, Lnone i (sword Uptr))
       | Lvar x =>
         Let p := get_regptr x in
-        Let rmap := set_word rmap x sr Valid U32 in (* FIXME: no align check *)
+        let rmap := set_move rmap x sr Valid in (* FIXME: no align check *)
         (* TODO: Lvar p or Lvar (with_var x p) like in alloc_call_arg? *)
         ok (rmap, Lvar p)
       | Laset _ aa ws x e1 => Error (stk_ierror_basic x "array assignement in lval of a call")
@@ -1528,7 +1605,7 @@ Definition alloc_syscall ii rmap rs o es :=
       Let p  := get_regptr xe in
       Let xp := get_regptr x in
       Let sr := get_sub_region rmap xe in
-      Let rmap := set_word rmap x sr Valid U32 in (* FIXME *)
+      let rmap := set_move rmap x sr Valid in (* FIXME *)
       ok (rmap,
           [:: MkI ii (sap_immediate saparams xlen (Zpos len));
               MkI ii (Csyscall [::Lvar xp] o [:: Plvar p; Plvar xlen])])
@@ -1593,23 +1670,22 @@ Fixpoint alloc_i sao (rmap:region_map) (i: instr) : cexec (region_map * cmd) :=
       alloc_syscall ii rmap rs o es
 
     | Cif e c1 c2 =>
-      Error (stk_error_no_var "if not supported") (*
       Let e := add_iinfo ii (alloc_e rmap e sbool) in
       Let c1 := fmapM (alloc_i sao) rmap c1 in
       Let c2 := fmapM (alloc_i sao) rmap c2 in
       let rmap:= merge c1.1 c2.1 in
-      ok (rmap, [:: MkI ii (Cif e (flatten c1.2) (flatten c2.2))]) *)
+      ok (rmap, [:: MkI ii (Cif e (flatten c1.2) (flatten c2.2))])
 
     | Cwhile a c1 e c2 =>
-      Error (stk_error_no_var "while not supported") (*
-      let check_c rmap :=
-        Let c1 := fmapM (alloc_i sao) rmap c1 in
-        let rmap1 := c1.1 in
-        Let e := add_iinfo ii (alloc_e rmap1 e sbool) in
-        Let c2 := fmapM (alloc_i sao) rmap1 c2 in
-        ok ((rmap1, c2.1), (e, (c1.2, c2.2))) in
-      Let r := loop2 ii check_c Loop.nb rmap in
-      ok (r.1, [:: MkI ii (Cwhile a (flatten r.2.2.1) r.2.1 (flatten r.2.2.2))]) *)
+      Let c1' := fmapM (alloc_i sao) rmap c1 in
+      let rmap1 := c1'.1 in
+      Let e := add_iinfo ii (alloc_e rmap1 e sbool) in
+      Let c2' := fmapM (alloc_i sao) rmap1 c2 in
+      let rmap2 := c2'.1 in
+      Let c3' := fmapM (alloc_i sao) rmap2 c1 in
+      let rmap3 := c3'.1 in
+      let rmap := merge rmap1 rmap3 in
+      ok (rmap, [:: MkI ii (Cwhile a (flatten c1'.2) e (flatten c2'.2))])
 
     | Ccall rs fn es =>
       Let ri := add_iinfo ii (alloc_call sao rmap rs fn es) in
