@@ -16,10 +16,10 @@ let pp_symbolic_slice fmt s =
   Format.fprintf fmt "[%a:%a]" pp_expr s.ss_ofs pp_expr s.ss_len
 
 let pp_symbolic_zone fmt z =
-  Format.fprintf fmt "@[<h>%a@]" (Format.pp_print_list pp_symbolic_slice) z
+  Format.fprintf fmt "@[<hv>%a@]" (Format.pp_print_list pp_symbolic_slice) z
 
 let pp_sub_region fmt sr =
-  Format.fprintf fmt "@[<v>{ region = %a;@;<2 2>zone = %a }@]" pp_region sr.sr_region pp_symbolic_zone sr.sr_zone
+  Format.fprintf fmt "@[<hv>{ region = %a;@;<2 2>zone = %a }@]" pp_region sr.sr_region pp_symbolic_zone sr.sr_zone
 
 let pp_var_region fmt vr =
   Format.fprintf fmt "@[<v>";
@@ -28,12 +28,22 @@ let pp_var_region fmt vr =
   Format.fprintf fmt "@]"
 
 let rec pp_forest fmt f =
-  let pp_pair fmt (s, f) =
-    Format.fprintf fmt "%a ->@;<2 2>%a" pp_symbolic_slice s pp_forest f
-  in
   let open Region in
+  let pp_pair fmt (s, f) =
+    Format.fprintf fmt "%a" pp_symbolic_slice s;
+    match f with
+    | Nodes [] -> ()
+    | _ -> Format.fprintf fmt "@;%a" pp_forest f
+  in
   let Nodes l = f in
-  Format.fprintf fmt "@[<v>%a@]" (Format.pp_print_list ~pp_sep:Format.pp_print_cut pp_pair) l
+  match l with
+  | [] -> ()
+  | [sf] -> Format.fprintf fmt "%a" pp_pair sf
+  | _ ->
+    let pp_pair' fmt sf =
+      Format.fprintf fmt "- @[<v>%a@]" pp_pair sf
+    in
+    Format.fprintf fmt "%a" (Format.pp_print_list pp_pair') l
 
 let pp_status fmt s =
   let open Region in

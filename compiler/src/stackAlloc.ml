@@ -175,6 +175,10 @@ let memory_analysis string_of_sr print_rmap pp_err ~debug up =
     Format.eprintf "%a@.@.@." (pp_oracle up) saos
   end;
 
+  let print_rmap ii rmap =
+    if !Glob_options.debug then print_rmap ii rmap else rmap
+  in
+
   let sp' =
     match
       Stack_alloc.alloc_prog
