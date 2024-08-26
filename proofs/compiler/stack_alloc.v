@@ -331,10 +331,28 @@ Fixpoint filter_tree (z : symbolic_zone) (tree : symbolic_tree) : option symboli
     end
   end.
 *)
+Definition symbolic_slice_ble (s1 s2 : symbolic_slice) :=
+  let%opt ofs1 := is_const s1.(ss_ofs) in
+  let%opt len1 := is_const s1.(ss_len) in
+  let%opt ofs2 := is_const s2.(ss_ofs) in
+  Some (ofs1 + len1 <=? ofs2)%Z.
 
 Definition get_sub_forest s (f : symbolic_forest) : option symbolic_forest :=
   let: Nodes l := f in
-  find_map (fun '(s', l') => if symbolic_slice_beq s s' then Some l' else None) l.
+  if l is [::] then Some f
+  else
+    let fix aux l :=
+      match l with
+      | [::] => None
+      | (s', f') :: l =>
+        if symbolic_slice_beq s s' then Some f'
+        else if symbolic_slice_ble s s' then None
+        else if symbolic_slice_ble s' s then aux l
+        else
+          Some emptyf
+      end
+    in
+    aux l.
 
 Definition sub_status_at_ofs (status:status) ofs len :=
   match status with
@@ -343,6 +361,7 @@ Definition sub_status_at_ofs (status:status) ofs len :=
   | Borrowed l =>
     match get_sub_forest {| ss_ofs := ofs; ss_len := len |} l with
     | None => Valid
+    | Some emptyf => Unknown
     | Some l => Borrowed l
     end
   end.
@@ -373,11 +392,6 @@ Fixpoint tree_of_zone z :=
   | s :: z => [:: Node s (tree_of_zone z)]
   end.
 *)
-Definition symbolic_slice_ble (s1 s2 : symbolic_slice) :=
-  let%opt ofs1 := is_const s1.(ss_ofs) in
-  let%opt len1 := is_const s1.(ss_len) in
-  let%opt ofs2 := is_const s2.(ss_ofs) in
-  Some (ofs1 + len1 <=? ofs2)%Z.
 
 Fixpoint insert_sub_forest (f : symbolic_forest) z subf : option symbolic_forest :=
   match z with
@@ -973,6 +987,7 @@ Definition sub_region_pk x pk :=
 (* We write in variable [x]. We clear the zone corresponding to [x] for all
    variables of the same region, and set [status] as the new status of [x]. *)
 Definition set_word rmap sr (x:var_i) status ws :=
+  Let _ := writable x sr.(sr_region) in
   Let _ := check_align Aligned x sr ws in
   ok
     {| var_region := rmap.(var_region);
