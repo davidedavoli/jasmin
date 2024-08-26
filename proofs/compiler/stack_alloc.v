@@ -393,46 +393,13 @@ Fixpoint tree_of_zone z :=
   end.
 *)
 
-Fixpoint insert_sub_forest (f : symbolic_forest) z subf : option symbolic_forest :=
-  match z with
-  | [::] => subf
-  | s :: z =>
-    let fix aux l :=
-      match l with
-      | [::] =>
-        match insert_sub_forest emptyf z subf with
-        | None => Some [::]
-        | Some f => Some [:: (s, f)]
-        end
-      | ((s', f') as tree) :: l' =>
-        if symbolic_slice_beq s s' then
-          match insert_sub_forest f' z subf with
-          | None => Some l'
-          | Some f => Some ((s, f) :: l')
-          end
-        else if odflt false (symbolic_slice_ble s s') then
-          match insert_sub_forest emptyf z subf with
-          | None => Some l
-          | Some f => Some ((s, f) :: l)
-          end
-        else if odflt false (symbolic_slice_ble s' s) then
-          let%opt l' := aux l' in
-          Some (tree :: l')
-        else (* not disjoint (or at least it was not proved) *)
-          None
-      end
-    in
-    let: Nodes l := f in
-    omap Nodes (aux l)
-  end.
-
 Fixpoint init_forest (z : symbolic_zone) (f : symbolic_forest) :=
   match z with
   | [::] => f
   | s :: z => Nodes [:: (s, init_forest z f)]
   end.
 
-Fixpoint insert_sub_forest2 (f : symbolic_forest) z (subf : option symbolic_forest) : option symbolic_forest :=
+Fixpoint insert_sub_forest (f : symbolic_forest) z (subf : option symbolic_forest) : option symbolic_forest :=
   match z with
   | [::] => subf
   | s :: z =>
@@ -448,7 +415,7 @@ Fixpoint insert_sub_forest2 (f : symbolic_forest) z (subf : option symbolic_fore
           end
         | ((s', f') as tree) :: l' =>
           if symbolic_slice_beq s s' then
-            match insert_sub_forest2 f' z subf with
+            match insert_sub_forest f' z subf with
             | None => Some l'
             | Some f => Some ((s, f) :: l')
             end
@@ -461,7 +428,22 @@ Fixpoint insert_sub_forest2 (f : symbolic_forest) z (subf : option symbolic_fore
             let%opt l' := aux l' in
             Some (tree :: l')
           else (* not disjoint (or at least it was not proved) *)
-            None
+            match is_const s.(ss_ofs), is_const s.(ss_len), is_const s'.(ss_ofs), is_const s'.(ss_len) with
+            | Some ofs, Some len, Some ofs', Some len' =>
+              (* special case: everything is constant, and [subf] is None (meaning Valid)
+                 -> we check inclusion of s' in s and if ok, we remove [s']
+                 Otherwise, we return None (meaning Unknown) *)
+              if ((ofs <=? ofs') && (ofs' + len' <=? ofs + len))%Z then
+                match subf with
+                | None =>
+                  let%opt l' := aux l' in
+                  Some l'
+                | Some _ => None
+                end
+              else None
+            | _, _, _, _ =>
+              None
+            end
         end
       in
       match aux l with
@@ -479,10 +461,10 @@ Fixpoint insert_sub_forest2 (f : symbolic_forest) z (subf : option symbolic_fore
     sinon, on est potentiellement non disjoint : on passe à liste vide
 *)
 
-Definition insert_sub_forest3 (f : option symbolic_forest) z (subf : option symbolic_forest) : option symbolic_forest :=
+Definition insert_sub_oforest (f : option symbolic_forest) z (subf : option symbolic_forest) : option symbolic_forest :=
   match f with
   | None => omap (init_forest z) subf
-  | Some f => insert_sub_forest2 f z subf
+  | Some f => insert_sub_forest f z subf
   end.
 
 (*
@@ -539,7 +521,7 @@ Definition insert_status rmap z x status subf :=
       | Borrowed f => Some f
       end
     in
-    let f := insert_sub_forest3 f z subf in
+    let f := insert_sub_oforest f z subf in
     match f with
     | None => Some Valid
     | Some emptyf => None (* Unknown *)
@@ -1325,7 +1307,7 @@ Definition merge_forest (f1 f2 : symbolic_forest) :=
   let: Nodes l1 := f1 in
   foldl (fun acc '(s, f) =>
     let%opt acc := acc in
-    insert_sub_forest2 acc [:: s] (Some f)) (Some f2) l1.
+    insert_sub_forest acc [:: s] (Some f)) (Some f2) l1.
 
 Definition merge_status (_x:var) (status1 status2: option status) :=
   let%opt status1 := status1 in
