@@ -385,6 +385,7 @@ Definition compiler_front_end (entries: seq funname) (p: prog) : cexec sprog :=
   Let ps :=
     stack_alloc.alloc_prog
       (string_of_sr cparams)
+      (fun vk => fresh_var_ident cparams vk dummy_instr_info)
       (print_rmap cparams)
       true
       shparams

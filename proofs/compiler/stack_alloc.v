@@ -6,6 +6,7 @@ Require Import strings word utils type var expr.
 Require Import compiler_util byteset.
 Require slh_lowering.
 Require Import ZArith.
+Require Import Uint63.
 Require Import stack_alloc_params.
 
 Set Implicit Arguments.
@@ -714,6 +715,8 @@ Context
 .
 
 Context (string_of_sr : sub_region -> string).
+Context (
+  fresh_var_ident  : v_kind -> Uint63.int -> string -> stype -> Ident.ident).
 
 Definition mul := Papp2 (Omul (Op_w Uptr)).
 Definition add := Papp2 (Oadd (Op_w Uptr)).
@@ -880,6 +883,112 @@ Definition check_vpk_word rmap al x vpk ofs ws :=
   Let _ := check_valid x sr' bytes in
   check_align al x sr ws.
 *)
+
+Record table := {
+  bindings : Mvar.t pexpr;
+  counter : Uint63.int;
+  vars : Sv.t;
+}.
+(*
+Definition table_fresh t :=
+  let e := Pvar t.(counter) in
+  let t :=
+    {| bindings := t.(bindings);
+       counter  := Pos.succ t.(counter)
+    |}
+  in
+  (t, e).
+*)
+
+Definition clone (x:var_i) n :=
+  let xn :=
+    fresh_var_ident (Ident.id_kind x.(vname)) n (Ident.id_name x.(vname)) x.(vtype)
+  in
+  {| v_var := {| vtype := x.(vtype); vname := xn |}; v_info := x.(v_info) |}.
+
+Definition table_fresh_var t x :=
+  let x' := clone x t.(counter) in
+  if Sv.mem x' t.(vars) then None (* variable not fresh *)
+  else
+    let e := Pvar (mk_lvar x') in
+    let t :=
+      {| bindings := Mvar.set t.(bindings) x e;
+         counter  := Uint63.succ t.(counter);
+         vars := Sv.add x' t.(vars)
+      |}
+    in
+    Some (t, e).
+
+Definition table_get_var t (x:var_i) :=
+  match Mvar.get t.(bindings) x with
+  | Some e => Some (t, e)
+  | None => table_fresh_var t x
+  end.
+
+Definition merge_table (t1 t2 : table) :=
+  let b :=
+    Mvar.map2 (fun _ osp1 osp2 =>
+      match osp1, osp2 with
+      | Some sp1, Some sp2 => if eq_expr sp1 sp2 then osp1 else None
+      | _, _ => None
+      end) t1.(bindings) t2.(bindings)
+  in
+  let n :=
+    if Uint63.leb t1.(counter) t2.(counter) then t2.(counter)
+    else t1.(counter)
+  in
+  let vars := Sv.union t1.(vars) t2.(vars) in
+  {| bindings := b; counter := n; vars := vars |}.
+
+(* TODO: clean & move *)
+Definition fmapo :=
+  fun (aT bT cT : Type) (f : aT -> bT -> option (aT * cT)) =>
+  fix fmap (a : aT) (xs : seq bT) {struct xs} : option (aT * seq cT) :=
+    match xs with
+    | [::] => Some (a, [::])
+    | x :: xs =>
+      let%opt y := f a x in
+      let%opt ys := fmap y.1 xs in
+      Some (ys.1, y.2 :: ys.2)
+    end.
+
+Fixpoint symbolic_of_pexpr t e :=
+  match e with
+  | Pconst _ | Pbool _ => Some (t, e)
+  | Pvar x =>
+    if is_lvar x then table_get_var t x.(gv)
+    else None
+  | Papp1 op e =>
+    let%opt (t, e) := symbolic_of_pexpr t e in
+    Some (t, Papp1 op e)
+  | Papp2 op e1 e2 =>
+    let%opt (t, e1) := symbolic_of_pexpr t e1 in
+    let%opt (t, e2) := symbolic_of_pexpr t e2 in
+    Some (t, Papp2 op e1 e2)
+  | PappN op es =>
+    let%opt (t, es) := fmapo symbolic_of_pexpr t es in
+    Some (t, PappN op es)
+  | Pif ty b e1 e2 =>
+    let%opt (t, b) := symbolic_of_pexpr t b in
+    let%opt (t, e1) := symbolic_of_pexpr t e1 in
+    let%opt (t, e2) := symbolic_of_pexpr t e2 in
+    Some (t, Pif ty b e1 e2)
+  | _ => None
+  end.
+
+(* A version of symbolic_of_pexpr that fails. *)
+(* hack: we compare counter to detect whether t was changed, clean this up *)
+Definition get_symbolic_of_pexpr t e :=
+  let te := symbolic_of_pexpr t e in
+  match te with
+  | None => Error (stk_ierror_no_var "variable not fresh")
+  | Some (t', e) =>
+    if Uint63.eqb t'.(counter) t.(counter) then
+      ok e
+    else
+      Error (stk_ierror_no_var "variable not fresh 2")
+  end.
+
 Definition bad_arg_number := stk_ierror_no_var "invalid number of args".
 
 Fixpoint alloc_e (e:pexpr) ty :=
@@ -1102,7 +1211,7 @@ Definition mk_addr_pexpr rmap x vpk :=
    of y...
 *)
 (* Precondition is_sarr ty *)
-Definition alloc_array_move rmap r tag e :=
+Definition alloc_array_move table rmap r tag e :=
   Let: (sry, statusy, vpk, ey, ofs) :=
     match e with
     | Pvar y =>
@@ -1122,9 +1231,10 @@ Definition alloc_array_move rmap r tag e :=
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
         Let: (sr, status) := gget_sub_region_status rmap yv vpk in
+        Let se1 := get_symbolic_of_pexpr table e1 in
         let ofs := mk_ofs aa ws e1 in
-        let sr := sub_region_at_ofs sr (mk_ofs_int aa ws e1) (Pconst (arr_size ws len)) in
-        let status := sub_status_at_ofs status (mk_ofs_int aa ws e1) (Pconst (arr_size ws len)) in
+        let sr := sub_region_at_ofs sr (mk_ofs_int aa ws se1) (Pconst (arr_size ws len)) in
+        let status := sub_status_at_ofs status (mk_ofs_int aa ws se1) (Pconst (arr_size ws len)) in
         Let eofs := mk_addr_pexpr rmap yv vpk in
         ok (sr, status, vpk, eofs.1, add_ofs ofs eofs.2)
       end
@@ -1133,7 +1243,7 @@ Definition alloc_array_move rmap r tag e :=
   in
 
   match r with
-  | Lvar x => 
+  | Lvar x =>
     match get_local x with
     | None => Error (stk_ierror_basic x "register array remains")
     | Some pk =>
@@ -1176,6 +1286,7 @@ Definition alloc_array_move rmap r tag e :=
     | Some _ =>
       Let: (sr, status) := get_sub_region_status rmap x in
       let ofs := mk_ofs_int aa ws e in
+      Let ofs := get_symbolic_of_pexpr table ofs in
       let sr' := sub_region_at_ofs sr ofs (Pconst (arr_size ws len)) in
       Let _ :=
         assert (sub_region_beq sr' sry)
@@ -1255,7 +1366,7 @@ Definition alloc_protect_ptr rmap ii r t e msf :=
 (* We do not update the [var_region] part *)
 (* there seems to be an invariant: all Pdirect are in the rmap *)
 (* long-term TODO: we can avoid putting PDirect in the rmap (look in pmap instead) *)
-Definition alloc_array_move_init rmap r tag e :=
+Definition alloc_array_move_init table rmap r tag e :=
   if is_array_init e then
     match r with
     | Lvar x =>
@@ -1278,7 +1389,7 @@ Definition alloc_array_move_init rmap r tag e :=
       ok (rmap, nop)
     | _ => Error (stk_ierror_no_var "arrayinit of non-variable")
     end
-  else alloc_array_move rmap r tag e.
+  else alloc_array_move table rmap r tag e.
 
 Definition bad_lval_number := stk_ierror_no_var "invalid number of lval".
 
@@ -1590,62 +1701,81 @@ Definition alloc_array_swap rmap rs t es :=
     Error (stk_error_no_var "swap: invalid args or result, only reg ptr are accepted")
   end.
 
-Fixpoint alloc_i sao (rmap:region_map) (i: instr) : cexec (region_map * cmd) :=
+Definition update_table table lv ote :=
+  match lv with
+  | Lvar x =>
+    match ote with
+    | None =>
+      let x' := clone x table.(counter) in
+      {| bindings := Mvar.set table.(bindings) x (Pvar (mk_lvar x'));
+         counter := Uint63.succ table.(counter);
+         vars := Sv.add x' table.(vars) |}
+    | Some (table, e) =>
+      {| bindings := Mvar.set table.(bindings) x e;
+         counter := table.(counter);
+         vars := table.(vars) |}
+    end
+  | _ => table
+  end.
+
+Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region_map * cmd) :=
+  let (table, rmap) := trmap in
   let (ii, ir) := i in
-  Let: (rmap, c) :=
+  Let: (table, rmap, c) :=
     match ir with
     | Cassgn r t ty e =>
       if is_sarr ty then
-        Let ri := add_iinfo ii (alloc_array_move_init rmap r t e) in
-        ok (ri.1, [:: MkI ii ri.2])
+        Let ri := add_iinfo ii (alloc_array_move_init table rmap r t e) in
+        ok (table, ri.1, [:: MkI ii ri.2])
       else
+        let table := update_table table r (symbolic_of_pexpr table e) in
         Let e := add_iinfo ii (alloc_e rmap e ty) in
         Let r := add_iinfo ii (alloc_lval rmap r ty) in
-        ok (r.1, [:: MkI ii (Cassgn r.2 t ty e)])
+        ok (table, r.1, [:: MkI ii (Cassgn r.2 t ty e)])
 
     | Copn rs t o e =>
       if is_protect_ptr_fail rs o e is Some (r, e, msf) then
          Let rs := alloc_protect_ptr rmap ii r t e msf in
-         ok (rs.1, [:: MkI ii rs.2])
+         ok (table, rs.1, [:: MkI ii rs.2])
       else
       if is_swap_array o then
         Let rs := add_iinfo ii (alloc_array_swap rmap rs t e) in
-        ok (rs.1, [:: MkI ii rs.2])
+        ok (table, rs.1, [:: MkI ii rs.2])
       else
       Let e  := add_iinfo ii (alloc_es rmap e (sopn_tin o)) in
       Let rs := add_iinfo ii (alloc_lvals rmap rs (sopn_tout o)) in
-      ok (rs.1, [:: MkI ii (Copn rs.2 t o e)])
+      ok (table, rs.1, [:: MkI ii (Copn rs.2 t o e)])
 
     | Csyscall rs o es =>
-      alloc_syscall ii rmap rs o es
+      Let: (rmap, c) := alloc_syscall ii rmap rs o es in
+      ok (table, rmap, c)
 
     | Cif e c1 c2 =>
       Let e := add_iinfo ii (alloc_e rmap e sbool) in
-      Let c1 := fmapM (alloc_i sao) rmap c1 in
-      Let c2 := fmapM (alloc_i sao) rmap c2 in
-      let rmap:= merge c1.1 c2.1 in
-      ok (rmap, [:: MkI ii (Cif e (flatten c1.2) (flatten c2.2))])
+      Let: (table1, rmap1, c1) := fmapM (alloc_i sao) (table, rmap) c1 in
+      Let: (table2, rmap2, c2) := fmapM (alloc_i sao) (table, rmap) c2 in
+      let table := merge_table table1 table2 in
+      let rmap := merge rmap1 rmap2 in
+      ok (table, rmap, [:: MkI ii (Cif e (flatten c1) (flatten c2))])
 
     | Cwhile a c1 e c2 =>
-      Let c1' := fmapM (alloc_i sao) rmap c1 in
-      let rmap1 := c1'.1 in
+      Let: (table1, rmap1, c1') := fmapM (alloc_i sao) (table, rmap) c1 in
       Let e := add_iinfo ii (alloc_e rmap1 e sbool) in
-      Let c2' := fmapM (alloc_i sao) rmap1 c2 in
-      let rmap2 := c2'.1 in
-      Let c3' := fmapM (alloc_i sao) rmap2 c1 in
-      let rmap3 := c3'.1 in
+      Let: (table2, rmap2, c2') := fmapM (alloc_i sao) (table1, rmap1) c2 in
+      Let: (table3, rmap3, c3') := fmapM (alloc_i sao) (table2, rmap2) c1 in
+      let table := merge_table table1 table3 in
       let rmap := merge rmap1 rmap3 in
-      ok (rmap, [:: MkI ii (Cwhile a (flatten c1'.2) e (flatten c2'.2))])
+      ok (table, rmap, [:: MkI ii (Cwhile a (flatten c1') e (flatten c2'))])
 
     | Ccall rs fn es =>
       Let ri := add_iinfo ii (alloc_call sao rmap rs fn es) in
-      ok (ri.1, [::MkI ii ri.2])
+      ok (table, ri.1, [::MkI ii ri.2])
 
     | Cfor _ _ _  => Error (pp_at_ii ii (stk_ierror_no_var "don't deal with for loop"))
 
     end
     in
-    ok (print_rmap ii rmap, c).
+    ok (table, print_rmap ii rmap, c).
 
 End PROG.
 
@@ -1785,7 +1915,7 @@ Definition check_all_writable_regions_returned paramsi (ret_pos:seq (option nat)
     match osr with
     | Some sr => if sr.(sr_region).(r_writable) then Some i \in ret_pos else true
     | None => true
-    end) (iota 0 (size paramsi)) paramsi.
+    end) (iota 0 (seq.size paramsi)) paramsi.
 
 Definition check_results pmap rmap paramsi params ret_pos res :=
   Let _ := assert (check_all_writable_regions_returned paramsi ret_pos)
@@ -1832,6 +1962,14 @@ Definition alloc_fd_aux p_extra mglob (fresh_reg : string -> stype -> Ident.iden
   Let stack := init_stack_layout mglob sao in
   Let mstk := init_local_map vrip vrsp vxlen mglob stack sao in
   let '(locals, rmap, disj) := mstk in
+  let table := {| bindings := Mvar.empty _; counter := 0; vars := Sv.empty |} in
+  let table := fmapo table_fresh_var table fd.(f_params) in
+  Let table :=
+    match table with
+    | None => Error (stk_ierror_no_var "variable not fresh fd")
+    | Some (table, _) => ok table
+    end
+  in
   (* adding params to the map *)
   Let rparams :=
     init_params mglob stack disj locals rmap sao.(sao_params) fd.(f_params) in
@@ -1854,8 +1992,8 @@ Definition alloc_fd_aux p_extra mglob (fresh_reg : string -> stype -> Ident.iden
     assert_check (local_size <=? sao.(sao_max_size))%Z
                  (stk_ierror_no_var "sao_max_size too small")
   in
-  Let rbody := fmapM (alloc_i pmap local_alloc sao) rmap fd.(f_body) in
-  let: (rmap, body) := rbody in
+  Let: (table, rmap, body) :=
+    fmapM (alloc_i pmap local_alloc sao) (table, rmap) fd.(f_body) in
   Let res :=
       check_results pmap rmap paramsi fd.(f_params) sao.(sao_return) fd.(f_res) in
   ok {|

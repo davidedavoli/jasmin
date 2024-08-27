@@ -186,6 +186,7 @@ let memory_analysis string_of_sr print_rmap pp_err ~debug up =
         Arch.msf_size
         Arch.asmOp
         string_of_sr
+        (fun vk -> Conv.fresh_var_ident vk IInfo.dummy)
         print_rmap
         false
         Arch.aparams.ap_shp
