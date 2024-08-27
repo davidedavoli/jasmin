@@ -185,7 +185,7 @@ Record compiler_params
   fresh_var_ident  : v_kind -> instr_info -> int -> string -> stype -> Ident.ident;
   slh_info         : _uprog → funname → seq slh_t * seq slh_t;
   stack_zero_info  : funname -> option (stack_zero_strategy * option wsize);
-  print_rmap       : instr_info -> Region.region_map -> Region.region_map;
+  print_trmap       : instr_info -> table -> Region.region_map -> table * Region.region_map;
   string_of_sr     : sub_region -> string;
 }.
 
@@ -386,7 +386,7 @@ Definition compiler_front_end (entries: seq funname) (p: prog) : cexec sprog :=
     stack_alloc.alloc_prog
       (string_of_sr cparams)
       (fun vk => fresh_var_ident cparams vk dummy_instr_info)
-      (print_rmap cparams)
+      (print_trmap cparams)
       true
       shparams
       saparams

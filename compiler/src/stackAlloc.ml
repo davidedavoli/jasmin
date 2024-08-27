@@ -101,7 +101,7 @@ module StackAlloc (Arch: Arch_full.Arch) = struct
 
 module Regalloc = Regalloc (Arch)
 
-let memory_analysis string_of_sr print_rmap pp_err ~debug up =
+let memory_analysis string_of_sr print_trmap pp_err ~debug up =
   if debug then Format.eprintf "START memory analysis@.";
   let p = Conv.prog_of_cuprog up in
   let gao, sao = Varalloc.alloc_stack_prog Arch.callstyle Arch.reg_size p in
@@ -175,8 +175,8 @@ let memory_analysis string_of_sr print_rmap pp_err ~debug up =
     Format.eprintf "%a@.@.@." (pp_oracle up) saos
   end;
 
-  let print_rmap ii rmap =
-    if !Glob_options.debug then print_rmap ii rmap else rmap
+  let print_rmap ii table rmap =
+    if !Glob_options.debug then print_trmap ii table rmap else (table, rmap)
   in
 
   let sp' =

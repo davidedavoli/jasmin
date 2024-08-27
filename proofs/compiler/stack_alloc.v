@@ -749,7 +749,13 @@ Definition mk_ofsi aa ws e1 :=
 *)
 Section CHECK.
 
-Context (print_rmap : instr_info -> region_map -> region_map).
+Record table := {
+  bindings : Mvar.t pexpr;
+  counter : Uint63.int;
+  vars : Sv.t;
+}.
+
+Context (print_trmap : instr_info -> table -> region_map -> table * region_map).
 
 (* The code in this file is called twice.
    - First, it is called from the stack alloc OCaml oracle. Indeed, the oracle
@@ -884,11 +890,6 @@ Definition check_vpk_word rmap al x vpk ofs ws :=
   check_align al x sr ws.
 *)
 
-Record table := {
-  bindings : Mvar.t pexpr;
-  counter : Uint63.int;
-  vars : Sv.t;
-}.
 (*
 Definition table_fresh t :=
   let e := Pvar t.(counter) in
@@ -981,12 +982,8 @@ Fixpoint symbolic_of_pexpr t e :=
 Definition get_symbolic_of_pexpr t e :=
   let te := symbolic_of_pexpr t e in
   match te with
-  | None => Error (stk_ierror_no_var "variable not fresh")
-  | Some (t', e) =>
-    if Uint63.eqb t'.(counter) t.(counter) then
-      ok e
-    else
-      Error (stk_ierror_no_var "variable not fresh 2")
+  | None => Error (stk_ierror_no_var "expression too complex")
+  | Some te => ok te
   end.
 
 Definition bad_arg_number := stk_ierror_no_var "invalid number of args".
@@ -1212,7 +1209,7 @@ Definition mk_addr_pexpr rmap x vpk :=
 *)
 (* Precondition is_sarr ty *)
 Definition alloc_array_move table rmap r tag e :=
-  Let: (sry, statusy, vpk, ey, ofs) :=
+  Let: (table, sry, statusy, vpk, ey, ofs) :=
     match e with
     | Pvar y =>
       let yv := y.(gv) in
@@ -1222,7 +1219,7 @@ Definition alloc_array_move table rmap r tag e :=
       | Some vpk =>
         Let: (sr, status) := gget_sub_region_status rmap yv vpk in
         Let eofs := mk_addr_pexpr rmap yv vpk in
-        ok (sr, status, vpk, eofs.1, cast_const eofs.2)
+        ok (table, sr, status, vpk, eofs.1, cast_const eofs.2)
       end
     | Psub aa ws len y e1 =>
       let yv := y.(gv) in
@@ -1231,12 +1228,12 @@ Definition alloc_array_move table rmap r tag e :=
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
         Let: (sr, status) := gget_sub_region_status rmap yv vpk in
-        Let se1 := get_symbolic_of_pexpr table e1 in
+        Let: (table, se1) := get_symbolic_of_pexpr table e1 in
         let ofs := mk_ofs aa ws e1 in
         let sr := sub_region_at_ofs sr (mk_ofs_int aa ws se1) (Pconst (arr_size ws len)) in
         let status := sub_status_at_ofs status (mk_ofs_int aa ws se1) (Pconst (arr_size ws len)) in
         Let eofs := mk_addr_pexpr rmap yv vpk in
-        ok (sr, status, vpk, eofs.1, add_ofs ofs eofs.2)
+        ok (table, sr, status, vpk, eofs.1, add_ofs ofs eofs.2)
       end
     | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (y)")
     end
@@ -1262,22 +1259,22 @@ Definition alloc_array_move table rmap r tag e :=
                       pp_s ") regions are not equal"]))
         in
         let rmap := set_move rmap x sry statusy in (* TODO: we always do set_move -> factorize *)
-        ok (rmap, nop)
+        ok (table, rmap, nop)
       | Pregptr p =>
         let rmap := set_move rmap x sry statusy in (* TODO: we always do set_move -> factorize *)
         Let ir := get_addr x (Lvar (with_var x p)) tag vpk ey ofs in
-        ok (rmap, ir)
+        ok (table, rmap, ir)
       | Pstkptr slot ofsx ws cs x' =>
         if is_nop rmap x sry slot ws cs x' then
           let rmap := set_move rmap x sry statusy in (* TODO: we always do set_move -> factorize *)
-          ok (rmap, nop)
+          ok (table, rmap, nop)
         else
           let rmap := set_move rmap x sry statusy in (* TODO: we always do set_move -> factorize *)
           let rmap := set_stack_ptr rmap slot ws cs x' in
           let dx_ofs := cast_const (ofsx + cs.(cs_ofs)) in
           let dx := Lmem Aligned Uptr (with_var x pmap.(vrsp)) dx_ofs in
           Let ir := get_addr x dx tag vpk ey ofs in
-          ok (rmap, ir)
+          ok (table, rmap, ir)
       end
     end
   | Lasub aa ws len x e =>
@@ -1286,7 +1283,7 @@ Definition alloc_array_move table rmap r tag e :=
     | Some _ =>
       Let: (sr, status) := get_sub_region_status rmap x in
       let ofs := mk_ofs_int aa ws e in
-      Let ofs := get_symbolic_of_pexpr table ofs in
+      Let: (table, ofs) := get_symbolic_of_pexpr table ofs in
       let sr' := sub_region_at_ofs sr ofs (Pconst (arr_size ws len)) in
       Let _ :=
         assert (sub_region_beq sr' sry)
@@ -1302,7 +1299,7 @@ Definition alloc_array_move table rmap r tag e :=
                    pp_s ") regions are not equal"]))
       in
       let rmap := set_move_sub rmap sr' x status statusy in
-      ok (rmap, nop)
+      ok (table, rmap, nop)
     end
 
   | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (x)")
@@ -1386,7 +1383,7 @@ Definition alloc_array_move_init table rmap r tag e :=
         end
       in
       let rmap := set_move rmap x sr Valid in
-      ok (rmap, nop)
+      ok (table, rmap, nop)
     | _ => Error (stk_ierror_no_var "arrayinit of non-variable")
     end
   else alloc_array_move table rmap r tag e.
@@ -1701,15 +1698,11 @@ Definition alloc_array_swap rmap rs t es :=
     Error (stk_error_no_var "swap: invalid args or result, only reg ptr are accepted")
   end.
 
-Definition update_table table lv ote :=
+Definition update_table table lv e :=
   match lv with
   | Lvar x =>
-    match ote with
-    | None =>
-      let x' := clone x table.(counter) in
-      {| bindings := Mvar.set table.(bindings) x (Pvar (mk_lvar x'));
-         counter := Uint63.succ table.(counter);
-         vars := Sv.add x' table.(vars) |}
+    match symbolic_of_pexpr table e with
+    | None => table
     | Some (table, e) =>
       {| bindings := Mvar.set table.(bindings) x e;
          counter := table.(counter);
@@ -1725,10 +1718,10 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
     match ir with
     | Cassgn r t ty e =>
       if is_sarr ty then
-        Let ri := add_iinfo ii (alloc_array_move_init table rmap r t e) in
-        ok (table, ri.1, [:: MkI ii ri.2])
+        Let: (table, rmap, ir) := add_iinfo ii (alloc_array_move_init table rmap r t e) in
+        ok (table, rmap, [:: MkI ii ir])
       else
-        let table := update_table table r (symbolic_of_pexpr table e) in
+        let table := update_table table r e in
         Let e := add_iinfo ii (alloc_e rmap e ty) in
         Let r := add_iinfo ii (alloc_lval rmap r ty) in
         ok (table, r.1, [:: MkI ii (Cassgn r.2 t ty e)])
@@ -1775,7 +1768,8 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
 
     end
     in
-    ok (table, print_rmap ii rmap, c).
+    let (table, rmap) := print_trmap ii table rmap in
+    ok (table, rmap, c).
 
 End PROG.
 
@@ -1963,13 +1957,13 @@ Definition alloc_fd_aux p_extra mglob (fresh_reg : string -> stype -> Ident.iden
   Let mstk := init_local_map vrip vrsp vxlen mglob stack sao in
   let '(locals, rmap, disj) := mstk in
   let table := {| bindings := Mvar.empty _; counter := 0; vars := Sv.empty |} in
-  let table := fmapo table_fresh_var table fd.(f_params) in
+(*   let table := fmapo table_fresh_var table fd.(f_params) in
   Let table :=
     match table with
     | None => Error (stk_ierror_no_var "variable not fresh fd")
     | Some (table, _) => ok table
     end
-  in
+  in *)
   (* adding params to the map *)
   Let rparams :=
     init_params mglob stack disj locals rmap sao.(sao_params) fd.(f_params) in

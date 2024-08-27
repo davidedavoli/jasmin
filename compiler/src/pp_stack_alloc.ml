@@ -64,3 +64,13 @@ let pp_region_var fmt rv =
 let pp_rmap fmt rmap =
   let open Region in
   Format.fprintf fmt "@[<v>{ var_region:@;<2 4>%a@;<2 2>region_var:@;<2 4>%a@,}@]@." pp_var_region rmap.var_region pp_region_var rmap.region_var
+
+let pp_bindings fmt bindings =
+  Format.fprintf fmt "@[<v>";
+  Var0.Mvar.fold (fun x sp () ->
+    Format.fprintf fmt "@[<h>%a -> %a@]@,"
+      pp_var (Obj.magic x) pp_expr sp) bindings ();
+  Format.fprintf fmt "@]"
+
+let pp_table fmt t =
+  Format.fprintf fmt "@[<v>{ bindings:@;<2 4>%a@;<2 2>counter: %s@,}@]@." pp_bindings t.bindings (Uint63.to_string t.counter)
