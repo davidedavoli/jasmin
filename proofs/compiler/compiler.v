@@ -390,6 +390,7 @@ Definition compiler_front_end (entries: seq funname) (p: prog) : cexec sprog :=
       true
       shparams
       saparams
+      (ap_is_move_op aparams)
       (fresh_var_ident cparams (Reg (Normal, Direct)) dummy_instr_info 0)
       (global_static_data_symbol cparams)
       (stack_register_symbol cparams)

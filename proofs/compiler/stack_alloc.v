@@ -1394,22 +1394,30 @@ Definition alloc_lvals rmap rs tys :=
   fmapM2 bad_lval_number alloc_lval rmap rs tys.
 
 Section LOOP.
-(*
+
+Fixpoint incl_forest (f1 f2: symbolic_forest) : bool :=
+  let: Nodes l1 := f1 in
+  all (fun '(s1, f1) =>
+    let: Nodes l2 := f2 in
+    has (fun '(s2, f2) =>
+      if symbolic_slice_beq s1 s2 then incl_forest f1 f2
+      else false) l2
+  ) l1.
+
 Definition incl_status status1 status2 :=
   match status1, status2 with
   | Unknown, _ => true
   | _, Valid => true
-  | Borrowed zs1, Borrowed zs2 => all (fun z => has (incl_zones z) zs1) zs2
+  | Borrowed f1, Borrowed f2 => incl_forest f2 f1
   | _, _ => false
   end.
 
-Definition incl_bytes_map (_r: region) (bm1 bm2: bytes_map) :=
-  Mvar.incl (fun x => ByteSet.subset) bm1 bm2.
+Definition incl_status_map (sm1 sm2: status_map) :=
+  Mvar.incl (fun _ => incl_status) sm1 sm2.
 
 Definition incl (rmap1 rmap2:region_map) :=
-  Mvar.incl (fun x r1 r2 => r1 == r2) rmap1.(var_region) rmap2.(var_region) &&
-  Mr.incl incl_bytes_map rmap1.(region_var) rmap2.(region_var).
-*)
+  Mvar.incl (fun x r1 r2 => sub_region_beq r1 r2) rmap1.(var_region) rmap2.(var_region) &&
+  Mr.incl (fun _ => incl_status_map) rmap1.(region_var) rmap2.(region_var).
 
 Definition merge_forest (f1 f2 : symbolic_forest) :=
   let: Nodes l1 := f1 in
@@ -1445,20 +1453,25 @@ Definition merge (rmap1 rmap2:region_map) :=
         | _, _ => None
         end) rmap1.(var_region) rmap2.(var_region);
      region_var := Mr.map2 merge_status_map rmap1.(region_var) rmap2.(region_var) |}.
-(*
+
+ Definition incl_table (table1 table2 : table) := [&&
+   Mvar.incl (fun _ => eq_expr) table1.(bindings) table2.(bindings),
+   Uint63.leb table1.(counter) table2.(counter) &
+   Sv.subset table1.(vars) table2.(vars)].
+
  Variable ii:instr_info.
 
- Variable check_c2 : region_map -> cexec ((region_map * region_map) * (pexpr * (seq cmd * seq cmd)) ).
+ Variable check_c2 : table -> region_map -> cexec (((table * region_map) * (table * region_map)) * (pexpr * seq cmd * seq cmd) ).
 
- Fixpoint loop2 (n:nat) (m:region_map) :=
+ Fixpoint loop2 (n:nat) table (rmap:region_map) :=
     match n with
     | O => Error (pp_at_ii ii (stk_ierror_no_var "loop2"))
     | S n =>
-      Let m' := check_c2 m in
-      if incl m m'.1.2 then ok (m'.1.1, m'.2)
-      else loop2 n (merge m m'.1.2)
+      Let: ((table1, rmap1), (table2, rmap2), c) := check_c2 table rmap in
+      if incl_table table table2 && incl rmap rmap2 then ok (table1, rmap1, c)
+      else loop2 n (merge_table table table2) (merge rmap rmap2)
     end.
-*)
+
 End LOOP.
 
 Record stk_alloc_oracle_t :=
@@ -1698,11 +1711,16 @@ Definition alloc_array_swap rmap rs t es :=
     Error (stk_error_no_var "swap: invalid args or result, only reg ptr are accepted")
   end.
 
+Definition remove_binding table x :=
+  {| bindings := Mvar.remove table.(bindings) x;
+     counter := table.(counter);
+     vars := table.(vars) |}.
+
 Definition update_table table lv e :=
   match lv with
   | Lvar x =>
     match symbolic_of_pexpr table e with
-    | None => table
+    | None => remove_binding table x
     | Some (table, e) =>
       {| bindings := Mvar.set table.(bindings) x e;
          counter := table.(counter);
@@ -1710,6 +1728,8 @@ Definition update_table table lv e :=
     end
   | _ => table
   end.
+
+Context (is_move_op : asm_op_t -> bool).
 
 Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region_map * cmd) :=
   let (table, rmap) := trmap in
@@ -1735,6 +1755,17 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
         Let rs := add_iinfo ii (alloc_array_swap rmap rs t e) in
         ok (table, rs.1, [:: MkI ii rs.2])
       else
+      let table :=
+        match rs, o, e with
+        | [:: x], Oasm op, [:: e] =>
+          if is_move_op op then update_table table x e
+          else
+          foldl (fun table lv => update_table table lv (Parr_init 1%positive)) table rs
+        | _, _, _ =>
+          (* FIXME: this is a bit hacky *)
+          foldl (fun table lv => update_table table lv (Parr_init 1%positive)) table rs
+        end
+      in
       Let e  := add_iinfo ii (alloc_es rmap e (sopn_tin o)) in
       Let rs := add_iinfo ii (alloc_lvals rmap rs (sopn_tout o)) in
       ok (table, rs.1, [:: MkI ii (Copn rs.2 t o e)])
@@ -1752,13 +1783,14 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
       ok (table, rmap, [:: MkI ii (Cif e (flatten c1) (flatten c2))])
 
     | Cwhile a c1 e c2 =>
-      Let: (table1, rmap1, c1') := fmapM (alloc_i sao) (table, rmap) c1 in
-      Let e := add_iinfo ii (alloc_e rmap1 e sbool) in
-      Let: (table2, rmap2, c2') := fmapM (alloc_i sao) (table1, rmap1) c2 in
-      Let: (table3, rmap3, c3') := fmapM (alloc_i sao) (table2, rmap2) c1 in
-      let table := merge_table table1 table3 in
-      let rmap := merge rmap1 rmap3 in
-      ok (table, rmap, [:: MkI ii (Cwhile a (flatten c1') e (flatten c2'))])
+      let check_c table rmap :=
+        Let: (table1, rmap1, c1) := fmapM (alloc_i sao) (table, rmap) c1 in
+        Let e := add_iinfo ii (alloc_e rmap1 e sbool) in
+        Let: (table2, rmap2, c2) := fmapM (alloc_i sao) (table1, rmap1) c2 in
+        ok ((table1, rmap1), (table2, rmap2), (e, c1, c2))
+      in
+      Let: (table, rmap, (e, c1, c2)) := loop2 ii check_c Loop.nb table rmap in
+      ok (table, rmap, [:: MkI ii (Cwhile a (flatten c1) e (flatten c2))])
 
     | Ccall rs fn es =>
       Let ri := add_iinfo ii (alloc_call sao rmap rs fn es) in
@@ -1774,6 +1806,8 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
 End PROG.
 
 End Section.
+
+Context (is_move_op : asm_op_t -> bool).
 
 Definition init_stack_layout (mglob : Mvar.t (Z * wsize)) sao :=
   let add (xsr: var * wsize * Z)
@@ -1987,7 +2021,7 @@ Definition alloc_fd_aux p_extra mglob (fresh_reg : string -> stype -> Ident.iden
                  (stk_ierror_no_var "sao_max_size too small")
   in
   Let: (table, rmap, body) :=
-    fmapM (alloc_i pmap local_alloc sao) (table, rmap) fd.(f_body) in
+    fmapM (alloc_i pmap local_alloc is_move_op sao) (table, rmap) fd.(f_body) in
   Let res :=
       check_results pmap rmap paramsi fd.(f_params) sao.(sao_return) fd.(f_res) in
   ok {|

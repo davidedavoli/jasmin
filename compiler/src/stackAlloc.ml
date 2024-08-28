@@ -191,6 +191,7 @@ let memory_analysis string_of_sr print_trmap pp_err ~debug up =
         false
         Arch.aparams.ap_shp
         Arch.aparams.ap_sap
+        Arch.aparams.ap_is_move_op
         (Conv.fresh_var_ident (Reg (Normal, Pointer Writable)) IInfo.dummy (Uint63.of_int 0))
         crip
         crsp
