@@ -7,7 +7,7 @@ let pp_expr fmt x =
   Printer.pp_expr ~debug:true fmt (Conv.expr_of_cexpr x)
 
 let pp_region fmt r =
-  Format.fprintf fmt "{ slot = %a; wsize = %a; align = %b }"
+  Format.fprintf fmt "{ slot = %a; align = %a; writable = %b }"
     pp_var r.r_slot
     PrintCommon.pp_wsize r.r_align
     r.r_writable

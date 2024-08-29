@@ -1074,9 +1074,9 @@ Definition sub_region_pk x pk :=
 
 (* We write in variable [x]. We clear the zone corresponding to [x] for all
    variables of the same region, and set [status] as the new status of [x]. *)
-Definition set_word rmap sr (x:var_i) status ws :=
+Definition set_word rmap al sr (x:var_i) status ws :=
   Let _ := writable x sr.(sr_region) in
-  Let _ := check_align Aligned x sr ws in
+  Let _ := check_align al x sr ws in
   ok
     {| var_region := rmap.(var_region);
        region_var := set_word_status rmap sr x status |}.
@@ -1092,7 +1092,7 @@ Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
       if is_word_type (vtype x) is Some ws then
         if subtype (sword ws) ty then
           Let sr   := sub_region_pk x pk in
-          Let rmap := set_word rmap sr x Valid ws in
+          Let rmap := set_word rmap Aligned sr x Valid ws in
 (*           Let pofs := mk_addr_ptr x AAdirect ws pk (Pconst 0) in *)
           Let: (p, ofs) := addr_from_pk x pk in
           let r := Lmem Aligned ws p (cast_const ofs) in
@@ -1107,7 +1107,7 @@ Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
     | None => Let _ := check_diff x in ok (rmap, Laset al aa ws x e1)
     | Some pk =>
       Let: (sr, status) := get_sub_region_status rmap x in
-      Let rmap := set_word rmap sr x status ws in
+      Let rmap := set_word rmap al sr x status ws in
 (*       Let pofs := mk_addr_ptr x aa ws pk e1 in *)
       Let: (p, ofs) := addr_from_pk x pk in
       let ofs := add_ofs (mk_ofs aa ws e1) ofs in
