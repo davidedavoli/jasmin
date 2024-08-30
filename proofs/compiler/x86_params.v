@@ -44,9 +44,9 @@ Definition x86_op_align (x : var_i) (ws : wsize) (al : wsize) : fopn_args :=
 Definition lea_ptr x y tag ofs : instr_r :=
   Copn [:: x] tag (Ox86 (LEA Uptr)) [:: add y ofs].
 
-Definition x86_mov_ofs x tag vpk y ofs :=
+Definition x86_mov_ofs x tag movk y ofs :=
   let addr :=
-    if mk_mov vpk is MK_LEA
+    if movk is MK_LEA
     then
       lea_ptr x y tag ofs
     else

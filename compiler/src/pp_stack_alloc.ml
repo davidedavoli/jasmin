@@ -28,11 +28,10 @@ let pp_var_region fmt vr =
   Format.fprintf fmt "@]"
 
 let rec pp_forest fmt f =
-  let open Region in
   let pp_pair fmt (s, f) =
     Format.fprintf fmt "%a" pp_symbolic_slice s;
     match f with
-    | Nodes [] -> ()
+    | Forest.Nodes [] -> ()
     | _ -> Format.fprintf fmt "@;%a" pp_forest f
   in
   let Nodes l = f in
@@ -46,7 +45,6 @@ let rec pp_forest fmt f =
     Format.fprintf fmt "%a" (Format.pp_print_list pp_pair') l
 
 let pp_status fmt s =
-  let open Region in
   match s with
   | Valid -> Format.fprintf fmt "Valid"
   | Unknown -> Format.fprintf fmt "Unknown"
@@ -62,7 +60,6 @@ let pp_region_var fmt rv =
   Format.fprintf fmt "@]"
 
 let pp_rmap fmt rmap =
-  let open Region in
   Format.fprintf fmt "@[<v>{ var_region:@;<2 4>%a@;<2 2>region_var:@;<2 4>%a@,}@]@." pp_var_region rmap.var_region pp_region_var rmap.region_var
 
 let pp_bindings fmt bindings =

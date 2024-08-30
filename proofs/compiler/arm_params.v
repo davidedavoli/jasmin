@@ -38,12 +38,12 @@ Definition is_load e :=
   if e is Pload _ _ _ _ then true else false.
 
 Definition arm_mov_ofs
-  (x : lval) (tag : assgn_tag) (vpk : vptr_kind) (y : pexpr) (ofs : pexpr) :
+  (x : lval) (tag : assgn_tag) (movk : mov_kind) (y : pexpr) (ofs : pexpr) :
   option instr_r :=
   let mk oa :=
     let: (op, args) := oa in
      Some (Copn [:: x ] tag (Oarm (ARM_op op default_opts)) args) in
-  match mk_mov vpk with
+  match movk with
   | MK_LEA => mk (ADR, [:: if is_zero Uptr ofs then y else add y ofs ])
   | MK_MOV =>
     match x with

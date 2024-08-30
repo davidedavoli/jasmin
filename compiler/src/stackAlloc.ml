@@ -25,7 +25,7 @@ let pp_slot fmt ((x, ws), ofs) =
     (string_of_ws ws)
 
 let pp_slice fmt cs =
-  let open Stack_alloc_params in
+  let open Stack_alloc in
   Format.fprintf fmt "[%a:%a]"
     Z.pp_print (Conv.z_of_cz cs.cs_ofs)
     Z.pp_print (Conv.z_of_cz cs.cs_len)
@@ -124,7 +124,7 @@ let memory_analysis string_of_sr print_trmap pp_err ~debug up =
         pp_align    = pi.pi_align.ac_strict;
       }) in
     let conv_sub (i:Interval.t) = 
-      Stack_alloc_params.{ cs_ofs = Conv.cz_of_int i.min;
+      Stack_alloc.{ cs_ofs = Conv.cz_of_int i.min;
                     cs_len = Conv.cz_of_int (Interval.size i) } in
     let conv_ptr_kind x = function
       | Varalloc.Direct (s, i, sc) -> Stack_alloc.PIdirect (Conv.cvar_of_var s, conv_sub i, sc)
