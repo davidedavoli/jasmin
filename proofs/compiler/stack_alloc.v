@@ -185,22 +185,26 @@ Definition symbolic_slice_ble (s1 s2 : symbolic_slice) :=
   let%opt ofs2 := is_const s2.(ss_ofs) in
   Some (ofs1 + len1 <=? ofs2)%Z.
 
-Definition get_sub_forest s (f : symbolic_forest) : option symbolic_forest :=
-  let: Nodes l := f in
-  if l is [::] then Some f
-  else
-    let fix aux l :=
-      match l with
-      | [::] => None
-      | (s', f') :: l =>
-        if symbolic_slice_beq s s' then Some f'
-        else if odflt false (symbolic_slice_ble s s') then None
-        else if odflt false (symbolic_slice_ble s' s) then aux l
-        else
-          Some emptyf
-      end
-    in
-    aux l.
+Fixpoint get_sub_forest z (f : symbolic_forest) : option symbolic_forest :=
+  match z with
+  | [::] => Some f
+  | s :: z =>
+    let: Nodes l := f in
+    if l is [::] then Some f
+    else
+      let fix aux l :=
+        match l with
+        | [::] => None
+        | (s', f') :: l =>
+          if symbolic_slice_beq s s' then get_sub_forest z f'
+          else if odflt false (symbolic_slice_ble s s') then None
+          else if odflt false (symbolic_slice_ble s' s) then aux l
+          else
+            Some emptyf
+        end
+      in
+      aux l
+  end.
 
 Fixpoint init_forest (z : symbolic_zone) (f : symbolic_forest) :=
   match z with
@@ -489,33 +493,31 @@ Fixpoint get_suffix (z1 z2 : symbolic_zone) : option (option symbolic_zone) :=
       else
         match is_const s1.(ss_ofs), is_const s1.(ss_len), is_const s2.(ss_ofs), is_const s2.(ss_len) with
         | Some ofs1, Some len1, Some ofs2, Some len2 =>
-          let ofs := Z.max ofs1 ofs2 in
-          let len := (Z.min (ofs1 + len1) (ofs2 + len2) - ofs)%Z in
-          (* TODO: if this is the full zone, we could return None *)
-          Some (Some [:: {| ss_ofs := ofs; ss_len := len |}])
+          let m := Z.max ofs1 ofs2 in
+          let ofs := (m - ofs1)%Z in
+          let len := (Z.min (ofs1 + len1) (ofs2 + len2) - m)%Z in
+          (* special case when this is the full zone *)
+          if ((ofs == 0) && (len == len1))%Z then Some (Some [::])
+          else
+            Some (Some [:: {| ss_ofs := ofs; ss_len := len |}])
         | _, _, _, _ => None
         end
     end
   end.
 
-Definition sub_status_at_ofs (status:status) ofs len :=
+Definition get_sub_status z (status:status) :=
   match status with
   | Valid => Valid
   | Unknown => Unknown
   | Borrowed l =>
-    
-    match get_sub_forest {| ss_ofs := ofs; ss_len := len |} l with
+    match get_sub_forest z l with
     | None => Valid
     | Some emptyf => Unknown
     | Some l => Borrowed l
     end
   end.
 
-Definition insert_status rmap z x status subf :=
-  let%opt z :=
-    let%opt sr := Mvar.get rmap.(var_region) x in
-    get_suffix sr.(sr_zone) z
-  in
+Definition insert_status status z subf :=
   match z with
   | None => Some status
   | Some z =>
@@ -535,7 +537,12 @@ Definition insert_status rmap z x status subf :=
   end.
 
 (* Clearing is equivalent to inserting empty. *)
-Definition clear_status rmap z x status := insert_status rmap z x status (Some emptyf).
+Definition clear_status rmap z x status :=
+  let%opt z :=
+    let%opt sr := Mvar.get rmap.(var_region) x in
+    get_suffix sr.(sr_zone) z
+  in
+  insert_status status z (Some emptyf).
 
 Definition clear_status_map rmap z (sm:status_map) :=
   Mvar.filter_map (clear_status rmap z) sm.
@@ -577,7 +584,7 @@ Definition set_move (rmap:region_map) x sr status :=
   {| var_region := Mvar.set rmap.(var_region) x sr;
      region_var := rv |}.
 
-Definition set_move_sub_status rmap sr x status substatus :=
+Definition set_move_sub_status rv r x status z substatus :=
   let f :=
     match substatus with
     | Valid => None
@@ -585,13 +592,13 @@ Definition set_move_sub_status rmap sr x status substatus :=
     | Borrowed l => Some l
     end
   in
-  let status := odflt Unknown (insert_status rmap sr.(sr_zone) x status f) in
-  let sm := get_status_map rmap sr.(sr_region) in
+  let status := odflt Unknown (insert_status status z f) in
+  let sm := get_status_map rv r in
   let sm := set_status sm x status in
-  Mr.set rmap sr.(sr_region) sm.
+  Mr.set rv r sm.
 
-Definition set_move_sub (rmap:region_map) sr x status substatus :=
-  let rv := set_move_sub_status rmap sr x status substatus in
+Definition set_move_sub (rmap:region_map) r x status z substatus :=
+  let rv := set_move_sub_status rmap r x status z substatus in
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
@@ -839,14 +846,15 @@ Definition sub_region_glob x ws :=
   let r := {| r_slot := x; r_align := ws; r_writable := false |} in
   sub_region_full x r.
 
+(* For a local variable *)
 Definition get_sub_region_status (rmap:region_map) (x:var_i) :=
   Let sr := get_sub_region rmap x in
   let status := get_var_status rmap sr.(sr_region) x in
   ok (sr, status).
 
-(* TODO: better name *)
+(* For a local or global variable *)
 (* We need the vpk only to get the alignment in case VKglob *)
-Definition gget_sub_region_status rmap (x:var_i) vpk :=
+Definition get_gsub_region_status rmap (x:var_i) vpk :=
   match vpk with
   | VKglob (_, ws) =>
     let sr := sub_region_glob x ws in
@@ -979,7 +987,7 @@ Fixpoint alloc_e (e:pexpr) ty :=
     | Some vpk =>
       if is_word_type ty is Some ws then
         if subtype (sword ws) (vtype xv) then
-          Let: (_, status) := gget_sub_region_status rmap xv vpk in
+          Let: (_, status) := get_gsub_region_status rmap xv vpk in
           Let _ := check_valid xv status in
 (*           Let _ := check_vpk_word rmap Aligned xv vpk (Some 0%Z) ws in *)
 (*           Let pofs := mk_addr xv AAdirect ws vpk (Pconst 0) in *)
@@ -996,7 +1004,7 @@ Fixpoint alloc_e (e:pexpr) ty :=
     match vk with
     | None => Let _ := check_diff xv in ok (Pget al aa ws x e1)
     | Some vpk =>
-      Let: (_, status) := gget_sub_region_status rmap xv vpk in
+      Let: (_, status) := get_gsub_region_status rmap xv vpk in
       Let _ := check_valid xv status in
       Let: (p, ofs) := addr_from_vpk xv vpk in
       let ofs := add_ofs (mk_ofs aa ws e1) ofs in
@@ -1197,7 +1205,7 @@ Definition alloc_array_move table rmap r tag e :=
       match vk with
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
-        Let: (sr, status) := gget_sub_region_status rmap yv vpk in
+        Let: (sr, status) := get_gsub_region_status rmap yv vpk in
         Let eofs := mk_addr_pexpr rmap yv vpk in
         ok (table, sr, status, mk_mov vpk, eofs.1, cast_const eofs.2)
       end
@@ -1207,13 +1215,19 @@ Definition alloc_array_move table rmap r tag e :=
       match vk with
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
-        Let: (sr, status) := gget_sub_region_status rmap yv vpk in
+        Let: (sr, status) := get_gsub_region_status rmap yv vpk in
         Let: (table, se1) := get_symbolic_of_pexpr table e1 in
         let ofs := mk_ofs aa ws e1 in
-        let sr := sub_region_at_ofs sr (mk_ofs_int aa ws se1) (Pconst (arr_size ws len)) in
-        let status := sub_status_at_ofs status (mk_ofs_int aa ws se1) (Pconst (arr_size ws len)) in
+        let sr' := sub_region_at_ofs sr (mk_ofs_int aa ws se1) (Pconst (arr_size ws len)) in
+        Let z :=
+          match get_suffix sr.(sr_zone) sr'.(sr_zone) with
+          | Some (Some z) => ok z
+          | _ => Error (stk_ierror_no_var "not a sub-region")
+          end
+        in
+        let status := get_sub_status z status in
         Let eofs := mk_addr_pexpr rmap yv vpk in
-        ok (table, sr, status, mk_mov vpk, eofs.1, add_ofs ofs eofs.2)
+        ok (table, sr', status, mk_mov vpk, eofs.1, add_ofs ofs eofs.2)
       end
     | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (y)")
     end
@@ -1262,8 +1276,8 @@ Definition alloc_array_move table rmap r tag e :=
     | None   => Error (stk_ierror_basic x "register array remains")
     | Some _ =>
       Let: (sr, status) := get_sub_region_status rmap x in
+      Let: (table, e) := get_symbolic_of_pexpr table e in
       let ofs := mk_ofs_int aa ws e in
-      Let: (table, ofs) := get_symbolic_of_pexpr table ofs in
       let sr' := sub_region_at_ofs sr ofs (Pconst (arr_size ws len)) in
       Let _ :=
         assert (sub_region_beq sr' sry)
@@ -1278,7 +1292,13 @@ Definition alloc_array_move table rmap r tag e :=
                    ];
                    pp_s ") regions are not equal"]))
       in
-      let rmap := set_move_sub rmap sr' x status statusy in
+      Let z :=
+        match get_suffix sr.(sr_zone) sr'.(sr_zone) with
+        | Some z => ok z
+        | _ => Error (stk_ierror_no_var "not a sub-region (sub)")
+        end
+      in
+      let rmap := set_move_sub rmap sr.(sr_region) x status z statusy in
       ok (table, rmap, nop)
     end
 
@@ -1309,7 +1329,7 @@ Definition alloc_protect_ptr rmap ii r t e msf :=
                         (stk_error_no_var "argument of protect_ptr should be a reg ptr") in
         Let _ := assert (if r is Lvar _ then true else false)
                         (stk_error_no_var "destination of protect_ptr should be a reg ptr") in
-        Let: (sr, status) := gget_sub_region_status rmap yv vpk in
+        Let: (sr, status) := get_gsub_region_status rmap yv vpk in
         Let: (e, _ofs) := mk_addr_pexpr rmap yv vpk in (* ofs is ensured to be 0 *)
         ok (sr, status, vpk, e)
       end
