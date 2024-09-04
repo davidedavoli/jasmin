@@ -168,8 +168,6 @@ Definition sub_region_beq sr1 sr2 :=
 (* ------------------------------------------------------------------ *)
 (* Forest *)
 
-Module Import Forest.
-
 Inductive symbolic_forest :=
 | Nodes : seq (symbolic_slice * symbolic_forest) -> symbolic_forest.
 
@@ -279,8 +277,6 @@ Definition insert_sub_oforest (f : option symbolic_forest) z (subf : option symb
   | None => omap (init_forest z) subf
   | Some f => insert_sub_forest f z subf
   end.
-
-End Forest.
 
 
 (* ------------------------------------------------------------------ *)

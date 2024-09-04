@@ -15,7 +15,6 @@ Unset Printing Implicit Defensive.
 Local Open Scope seq_scope.
 Local Open Scope Z_scope.
 
-Import Region.
 (* --------------------------------------------------------------------------- *)
 
 (* Size of a value. *)
@@ -137,10 +136,10 @@ Record wf_global g ofs ws := {
 Definition wbase_ptr sc :=
   if sc == Sglob then rip else rsp.
 
-Record wf_direct (x : var) (s : slot) ofs ws z sc := {
+Record wf_direct (x : var) (s : slot) ofs ws cs sc := {
   wfd_slot : Sv.In s Slots;
-  wfd_size : size_slot x <= z.(z_len);
-  wfd_zone : 0 <= z.(z_ofs) /\ z.(z_ofs) + z.(z_len) <= size_slot s;
+  wfd_size : size_slot x <= cs.(cs_len);
+  wfd_zone : 0 <= cs.(cs_ofs) /\ cs.(cs_ofs) + cs.(cs_len) <= size_slot s;
   wfd_writable : Writable s = (sc != Sglob);
   wfd_align : Align s = ws;
   wfd_offset : Addr s = (wbase_ptr sc + wrepr Uptr ofs)%R
@@ -156,15 +155,15 @@ Record wf_regptr x xr := {
     get_local pmap y = Some (Pregptr yr) -> x <> y -> xr <> yr
 }.
 
-Record wf_stkptr (x : var) (s : slot) ofs ws z (xf : var) := {
+Record wf_stkptr (x : var) (s : slot) ofs ws cs (xf : var) := {
   wfs_slot : Sv.In s Slots;
   wfs_type : is_sarr (vtype x);
-  wfs_size : wsize_size Uptr <= z.(z_len);
-  wfs_zone : 0 <= z.(z_ofs) /\ z.(z_ofs) + z.(z_len) <= size_slot s;
+  wfs_size : wsize_size Uptr <= cs.(cs_len);
+  wfs_zone : 0 <= cs.(cs_ofs) /\ cs.(cs_ofs) + cs.(cs_len) <= size_slot s;
   wfs_writable : Writable s;
   wfs_align : Align s = ws;
   wfs_align_ptr : (Uptr <= ws)%CMP;
-  wfs_offset_align : is_align (wrepr _ z.(z_ofs))%R Uptr;
+  wfs_offset_align : is_align (wrepr _ cs.(cs_ofs))%R Uptr;
   wfs_offset : Addr s = (rsp + wrepr Uptr ofs)%R;
   wfs_new : Sv.In xf pmap.(vnew);
   wfs_distinct : forall y s' ofs' ws' z' yf,
@@ -207,45 +206,90 @@ Record wf_region (r : region) := {
   wfr_align    : Align r.(r_slot) = r.(r_align);
 }.
 
-(* Well-formedness of a [zone]. *)
-Record wf_zone (z : zone) (ty : stype) (sl : slot) := {
-  wfz_len : size_of ty <= z.(z_len);
+(* We interpret a symbolic_slice as a concrete_slice *)
+Definition sem_slice (es:estate) (s : symbolic_slice) : result error concrete_slice :=
+  Let ofs := sem_pexpr true [::] es s.(ss_ofs) >>= to_int in
+  Let len := sem_pexpr true [::] es s.(ss_len) >>= to_int in
+  ok {| cs_ofs := ofs; cs_len := len |}.
+
+(* We interpret a symbolic_zone also as a concrete_slice *)
+Fixpoint sem_zone es z :=
+  match z with
+  | [::] => Error ErrOob
+  | [:: s] => sem_slice es s
+  | s :: z =>
+    Let cs1 := sem_slice es s in
+    Let cs2 := sem_zone es z in
+    ok {| cs_ofs := cs1.(cs_ofs) + cs2.(cs_ofs); cs_len := cs2.(cs_len) |}
+  end.
+
+(* Well-formedness of a [concrete_slice]. *)
+Record wf_concrete_slice (cs : concrete_slice) (ty : stype) (sl : slot) := {
+  wfcs_len : size_of ty <= cs.(cs_len);
     (* the zone is big enough to store a value of type [ty] *)
-  wfz_ofs : 0 <= z.(z_ofs) /\ z.(z_ofs) + z.(z_len) <= size_slot sl
+  wfcs_ofs : 0 <= cs.(cs_ofs) /\ cs.(cs_ofs) + cs.(cs_len) <= size_slot sl
     (* the zone is a small enough to be in slot [sl] *)
 }.
 
+Definition wf_zone es z ty sl :=
+  forall cs, sem_zone es z = ok cs ->
+  wf_concrete_slice cs ty sl.
+
 (* Well-formedness of a [sub_region]. *)
-Record wf_sub_region (sr : sub_region) ty := {
+Record wf_sub_region es (sr : sub_region) ty := {
   wfsr_region :> wf_region sr.(sr_region);
-  wfsr_zone   :> wf_zone sr.(sr_zone) ty sr.(sr_region).(r_slot)
+  wfsr_zone   :> wf_zone es sr.(sr_zone) ty sr.(sr_region).(r_slot)
 }.
 
-Definition wfr_WF (rmap : region_map) :=
+Definition wfr_WF es (rmap : region_map) :=
   forall x sr,
     Mvar.get rmap.(var_region) x = Some sr ->
-    wf_sub_region sr x.(vtype).
+    wf_sub_region es sr x.(vtype).
 
-(* TODO: should we raise another error in the Vword case ? Not really important *)
 (* This allows to read uniformly in words and arrays. *)
 Definition get_val_byte v off :=
   match v with
-  | Vword ws w => if ((0 <=? off) && (off <? wsize_size ws)) then ok (LE.wread8 w off) else type_error
+  | Vword ws w =>
+    if ((0 <=? off) && (off <? wsize_size ws)) then ok (LE.wread8 w off)
+    else Error ErrOob
   | Varr _ a => read a Aligned off U8
   |_ => type_error
   end.
 
-Definition sub_region_addr sr :=
-  (Addr sr.(sr_region).(r_slot) + wrepr _ sr.(sr_zone).(z_ofs))%R.
+Definition sub_region_addr es sr :=
+  Let cs := sem_zone es sr.(sr_zone) in
+  ok (Addr sr.(sr_region).(r_slot) + wrepr _ cs.(cs_ofs))%R.
 
-Definition eq_sub_region_val_read (m2:mem) sr bytes v :=
-  forall off,
-     ByteSet.memi bytes (sr.(sr_zone).(z_ofs) + off) ->
-     forall w, get_val_byte v off = ok w ->
-     read m2 Aligned (sub_region_addr sr + wrepr _ off)%R U8 = ok w.
+Fixpoint all_zones f : seq symbolic_zone :=
+  match f with
+  | Forest.emptyf => [::[::]]
+  | Forest.Nodes l =>
+    conc_map (fun '(s, f) =>
+      map (cons s) (all_zones f)) l
+    end.
 
-Definition eq_sub_region_val ty m2 sr bytes v :=
-  eq_sub_region_val_read m2 sr bytes v /\
+Definition offset_in_concrete_slice cs off :=
+  ((cs.(cs_ofs) <=? off) && (off <? cs.(cs_ofs) + cs.(cs_len)))%Z.
+
+Definition valid_offset es status off : Prop :=
+  match status with
+  | Valid => true
+  | Unknown => false
+  | Borrowed f =>
+    forall z cs, List.In z (all_zones f) ->
+    sem_zone es z = ok cs ->
+    offset_in_concrete_slice cs off
+  end.
+
+Definition eq_sub_region_val_read es (m2:mem) sr status v :=
+  forall off ofs w,
+     sub_region_addr es sr = ok ofs ->
+     valid_offset es status off ->
+     get_val_byte v off = ok w ->
+     read m2 Aligned (ofs + wrepr _ off)%R U8 = ok w.
+
+Definition eq_sub_region_val es ty m2 sr bytes v :=
+  eq_sub_region_val_read es m2 sr bytes v /\
   (* According to the psem semantics, a variable of type [sword ws] can store
      a value of type [sword ws'] of shorter size (ws' <= ws).
      But actually, this is used only for register variables.
@@ -268,45 +312,55 @@ Notation gd := (p_globs P).
    pmap.(globals) and pmap.(locals)
    Could pmap.(globlals) and pmap.(locals) directly return sub_regions ?
 *)
-Definition check_gvalid rmap x : option (sub_region * ByteSet.t) :=
+Definition check_gvalid rmap x : option (sub_region * status) :=
   if is_glob x then 
     omap (fun '(_, ws) =>
       let sr := sub_region_glob x.(gv) ws in
-      let bytes := ByteSet.full (interval_of_zone sr.(sr_zone)) in
-      (sr, bytes)) (Mvar.get pmap.(globals) (gv x))
+      let status := Valid in
+      (sr, status)) (Mvar.get pmap.(globals) (gv x))
   else
     let sr := Mvar.get rmap.(var_region) x.(gv) in
     match sr with
     | Some sr =>
-      let bytes := get_var_bytes rmap.(region_var) sr.(sr_region) x.(gv) in
-      Some (sr, bytes)
+      let status := get_var_status rmap.(region_var) sr.(sr_region) x.(gv) in
+      Some (sr, status)
     | _ => None
     end.
+(* tentative de réécrire avec ce qu'on a déjà
+Definition f rmap x :=
+  Let vpk := get_var_kind pmap x in cexec pp_error_loc
+  Let vpk := o2r ErrOob vpk in
+  get_gsub_region_status rmap x.(gv) vpk.
+*)
 
-Definition wfr_VAL (rmap:region_map) (s1:estate) (s2:estate) :=
+Definition wfr_VAL es (rmap:region_map) (s1:estate) (s2:estate) :=
   forall x sr bytes v, check_gvalid rmap x = Some (sr, bytes) -> 
     get_gvar true gd s1.(evm) x = ok v ->
-    eq_sub_region_val x.(gv).(vtype) s2.(emem) sr bytes v.
+    eq_sub_region_val es x.(gv).(vtype) s2.(emem) sr bytes v.
 
-Definition valid_pk rmap (s2:estate) sr pk :=
+Definition valid_pk es rmap (s2:estate) sr pk :=
   match pk with
-  | Pdirect s ofs ws z sc =>
-    sr = sub_region_direct s ws sc z
+  | Pdirect s ofs ws cs sc =>
+    sr = sub_region_direct s ws cs sc
   | Pstkptr s ofs ws z f =>
     check_stack_ptr rmap s ws z f ->
-    read s2.(emem) Aligned (sub_region_addr (sub_region_stkptr s ws z)) Uptr = ok (sub_region_addr sr)
+    forall pofs ofs,
+    sub_region_addr es (sub_region_stkptr s ws z) = ok pofs ->
+    sub_region_addr es sr = ok ofs ->
+    read s2.(emem) Aligned pofs Uptr = ok ofs
   | Pregptr p =>
-    s2.(evm).[p] = Vword (sub_region_addr sr)
+    forall ofs, sub_region_addr es sr = ok ofs ->
+    s2.(evm).[p] = Vword ofs
   end.
 
-Definition wfr_PTR (rmap:region_map) (s2:estate) :=
+Definition wfr_PTR es (rmap:region_map) (s2:estate) :=
   forall x sr, Mvar.get (var_region rmap) x = Some sr ->
-    exists pk, get_local pmap x = Some pk /\ valid_pk rmap s2 sr pk.
+    exists pk, get_local pmap x = Some pk /\ valid_pk es rmap s2 sr pk.
 
-Class wf_rmap (rmap:region_map) (s1:estate) (s2:estate) := {
-  wfr_wf  : wfr_WF rmap;
+Class wf_rmap es (rmap:region_map) (s1:estate) (s2:estate) := {
+  wfr_wf  : wfr_WF es rmap;
     (* sub-regions in [rmap] are well-formed *)
-  wfr_val : wfr_VAL rmap s1 s2;
+  wfr_val : wfr_VAL es rmap s1 s2;
     (* [rmap] remembers for each relevant program variable which part of the target
        memory contains the value that this variable has in the source. These pieces
        of memory can be safely read without breaking semantics preservation.
@@ -315,7 +369,7 @@ Class wf_rmap (rmap:region_map) (s1:estate) (s2:estate) := {
        the corresponding byte in the source. If a byte is not set, then there
        is no information.
     *)
-  wfr_ptr : wfr_PTR rmap s2;
+  wfr_ptr : wfr_PTR es rmap s2;
     (* a variable in [rmap] is also in [pmap] and there is a link between
        the values associated to this variable in both maps *)
 }.
@@ -330,7 +384,7 @@ Hypothesis wf_pmap0 : wf_pmap.
    [s1]: current source estate
    [s2]: current target estate
 *)
-Class valid_state (rmap : region_map) (m0 : mem) (s1 s2 : estate) := {
+Class valid_state es (rmap : region_map) (m0 : mem) (s1 s2 : estate) := {
   vs_scs         : s1.(escs) = s2.(escs);
   vs_slot_valid  : slot_valid s2.(emem);
     (* slots are valid in the target *)
@@ -350,8 +404,8 @@ Class valid_state (rmap : region_map) (m0 : mem) (s1 s2 : estate) := {
   vs_eq_vm       : eq_vm s1.(evm) s2.(evm);
     (* registers already present in the source program store the same values
        in the source and in the target *)
-  vs_wf_region   : wf_rmap rmap s1 s2;
-    (* cf. [wf_rmap) definition *)
+  vs_wf_region   : wf_rmap es rmap s1 s2;
+    (* cf. [wf_rmap] definition *)
   vs_eq_mem      : eq_mem_source s1.(emem) s2.(emem);
     (* the memory that is already valid in the source is the same in the target *)
   vs_glob_valid  : forall p, between rip glob_size p U8 -> validw m0 Aligned p U8;
@@ -365,30 +419,32 @@ Existing Instance vs_wf_region.
 (* We extend some predicates with the global case. *)
 (* -------------------------------------------------------------------------- *)
 
-Lemma sub_region_glob_wf x ofs ws :
+Lemma sub_region_glob_wf es x ofs ws :
   wf_global x ofs ws ->
-  wf_sub_region (sub_region_glob x ws) x.(vtype).
+  wf_sub_region es (sub_region_glob x ws) x.(vtype).
 Proof.
   move=> [*]; split.
   + by split=> //; apply /idP.
+  move=> cs.
+  rewrite /= /sem_slice /= => -[<-].
   by split=> /=; lia.
 Qed.
 
-Lemma check_gvalid_wf rmap x sr_bytes :
-  wfr_WF rmap ->
+Lemma check_gvalid_wf es rmap x sr_bytes :
+  wfr_WF es rmap ->
   check_gvalid rmap x = Some sr_bytes ->
-  wf_sub_region sr_bytes.1 x.(gv).(vtype).
+  wf_sub_region es sr_bytes.1 x.(gv).(vtype).
 Proof.
   move=> hwfr.
   rewrite /check_gvalid; case: (@idP (is_glob x)) => hg.
-  + by case heq: Mvar.get => [[??]|//] [<-] /=; apply (sub_region_glob_wf (wf_globals heq)).
+  + by case heq: Mvar.get => [[??]|//] [<-] /=; apply (sub_region_glob_wf es (wf_globals heq)).
   by case heq: Mvar.get => // -[<-]; apply hwfr.
 Qed.
 
-Definition valid_vpk rv s2 x sr vpk :=
+Definition valid_vpk es rv s2 x sr vpk :=
   match vpk with
   | VKglob (_, ws) => sr = sub_region_glob x ws
-  | VKptr pk => valid_pk rv s2 sr pk
+  | VKptr pk => valid_pk es rv s2 sr pk
   end.
 
 Lemma get_globalP x z : get_global pmap x = ok z <-> Mvar.get pmap.(globals) x = Some z.
@@ -398,11 +454,11 @@ Proof.
 Qed.
 
 (* A variant of [wfr_PTR] for [gvar]. *)
-Lemma wfr_gptr rmap s1 s2 x sr bytes :
-  wf_rmap rmap s1 s2 ->
+Lemma wfr_gptr es rmap s1 s2 x sr bytes :
+  wf_rmap es rmap s1 s2 ->
   check_gvalid rmap x = Some (sr, bytes) ->
   exists vpk, get_var_kind pmap x = ok (Some vpk)
-  /\ valid_vpk rmap s2 x.(gv) sr vpk.
+  /\ valid_vpk es rmap s2 x.(gv) sr vpk.
 Proof.
   move=> hrmap.
   rewrite /check_gvalid /get_var_kind.
