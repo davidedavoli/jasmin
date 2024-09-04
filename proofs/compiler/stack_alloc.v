@@ -389,6 +389,12 @@ Variant ptr_kind :=
 | Pregptr of var
 | Pstkptr of var & Z & wsize & concrete_slice & var.
 
+Variant vptr_kind :=
+| VKglob of Z * wsize
+| VKptr  of ptr_kind.
+
+Definition var_kind := option vptr_kind.
+
 Record pos_map := {
   vrip    : var; (* the variable containing rip (used for globals) *)
   vrsp    : var; (* the variable containing SP (the stack pointer) *)
@@ -574,6 +580,15 @@ Definition set_word_status (rmap:region_map) sr x status :=
   let sm := set_status sm x status in
   Mr.set rmap sr.(sr_region) sm.
 
+(* We write in variable [x]. We clear the zone corresponding to [x] for all
+   variables of the same region, and set [status] as the new status of [x]. *)
+Definition set_word rmap al sr (x:var_i) status ws :=
+  Let _ := check_writable x sr.(sr_region) in
+  Let _ := check_align al x sr ws in
+  ok
+    {| var_region := rmap.(var_region);
+       region_var := set_word_status rmap sr x status |}.
+
 Definition set_move_status rv x sr status :=
   let sm := get_status_map rv sr.(sr_region) in
   let sm := set_status sm x status in
@@ -616,227 +631,11 @@ Definition set_stack_ptr (rmap:region_map) s ws cs (x':var) :=
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
+(* Checks that the stack pointer itself (not the pointed data) is valid *)
 Definition check_stack_ptr rmap s ws cs x' :=
   let sr := sub_region_stkptr s ws cs in
   let status := get_var_status rmap sr.(sr_region) x' in
   is_valid status.
-
-(*
-(* Precondition size_of x = ws && length sr.sr_zone = wsize_size ws *)
-Definition set_word rmap (x:var_i) sr ws :=
-  Let _ := check_align Aligned x sr ws in
-  set_sub_region rmap x sr (Some 0)%Z (size_slot x).
-
-(* If we write to array [x] at offset [ofs], we invalidate the corresponding
-   memory zone for the other variables, and mark it as valid for [x].
-   The offset [ofs] can be None, meaning its exact value is not known. In this
-   case, the full zone [z] associated to array [x] is invalidated for the
-   other variables, and remains the zone associated to [x]. It is a safe
-   approximation.
-*)
-(* [set_word], [set_stack_ptr] and [set_arr_word] could be factorized? -> think more about it *)
-Definition set_arr_word (rmap:region_map) al (x:var_i) ofs ws :=
-  Let sr := get_sub_region rmap x in
-  Let _ := check_align al x sr ws in
-  set_sub_region rmap x sr ofs (wsize_size ws).
-
-Definition set_arr_call rmap x sr := set_sub_region rmap x sr (Some 0)%Z (size_slot x).
-
-Definition set_move_bytes rv x sr bytesy :=
-  let bm := get_bytes_map sr.(sr_region) rv in
-  let bytes := get_bytes x bm in
-  let bytes := ByteSet.remove bytes (interval_of_zone sr.(sr_zone)) in
-  let bytes := ByteSet.union bytes bytesy in
-  let bm := Mvar.set bm x bytes in
-  Mr.set rv sr.(sr_region) bm.
-
-Definition set_move_sub (rmap:region_map) x sr bytes :=
-  let rv := set_move_bytes rmap x sr bytes in
-  {| var_region := rmap.(var_region);
-     region_var := rv |}.
-
-Definition set_arr_sub (rmap:region_map) (x:var_i) ofs len sr_from bytesy :=
-  Let sr := get_sub_region rmap x in
-  let sr' := sub_region_at_ofs sr (Some ofs) len in
-  Let _ := assert (sr' == sr_from)
-                  (stk_ierror x
-                    (pp_box [::
-                      pp_s "the assignment to sub-array"; pp_var x;
-                      pp_s "cannot be turned into a nop: source and destination regions are not equal"]))
-  in
-  ok (set_move_sub rmap x sr' bytesy).
-
-(* identical to [set_sub_region], except clearing
-   TODO: fusion with set_arr_sub ? not sure its worth
-*)
-Definition set_move (rmap:region_map) (x:var) sr bytesy :=
-  let rv := set_move_bytes rmap x sr bytesy in
-  {| var_region := Mvar.set rmap.(var_region) x sr;
-     region_var := rv |}.
-
-Definition set_arr_init rmap x sr := set_move rmap x sr.
-*)
-
-Section WITH_PARAMS.
-
-Context
-  {asm_op : Type}
-  {pd : PointerData}
-  {msfsz : MSFsize}
-  {asmop : asmOp asm_op}
-.
-
-Context
-  (string_of_sr : sub_region -> string)
-  (fresh_var_ident  : v_kind -> Uint63.int -> string -> stype -> Ident.ident).
-
-Definition mul := Papp2 (Omul (Op_w Uptr)).
-Definition add := Papp2 (Oadd (Op_w Uptr)).
-
-(* TODO: do we need to do the check here? I think we can always return the
-   "else" version, and in a later pass, it will be recognized as a constant? *)
-(* It seems indeed that it is an optim, mk_lea recognize that it is a constant. *)
-Definition mk_ofs aa ws e1 :=
-  let sz := mk_scale aa ws in
-  if is_const e1 is Some i then
-    cast_const (i * sz)%Z
-  else
-    mul (cast_const sz) (cast_ptr e1).
-
-(* For the analysis*)
-Definition mk_ofs_int aa ws e1 :=
-  let sz := mk_scale aa ws in
-  if is_const e1 is Some i then Pconst (i * sz)%Z
-  else (Papp2 (Omul Op_int) (Pconst sz) e1).
-
-(* Do we want the optim for constants? *)
-Definition add_ofs ofs1 ofs2 :=
-  match is_wconst_of_size Uptr ofs1 with
-  | Some ofs1 => cast_const (ofs1 + ofs2)
-  | None => add ofs1 (cast_const ofs2)
-  end.
-(*
-Definition mk_ofsi aa ws e1 :=
-  if is_const e1 is Some i then Some (i * (mk_scale aa ws))%Z
-  else None.
-*)
-Section CHECK.
-
-Record table := {
-  bindings : Mvar.t pexpr;
-  counter : Uint63.int;
-  vars : Sv.t;
-}.
-
-Context (print_trmap : instr_info -> table -> region_map -> table * region_map).
-
-(* The code in this file is called twice.
-   - First, it is called from the stack alloc OCaml oracle. Indeed, the oracle
-     returns initial results, and performs stack and reg allocation using
-     these results. Based on the program that it obtains,
-     it fixes some of the results and returns them.
-   - Second, it is called as a normal compilation pass on the results returned
-     by the oracle.
-
-   When the code is called from the OCaml oracle, all the checks
-   that are performed so that the pass can be proved correct are actually not
-   needed. We introduce this boolean [check] to deactivate some of the tests
-   when the code is called from the oracle.
-
-   TODO: deactivate more tests (or even do not use rmap) when [check] is [false]
-*)
-Variable (check : bool).
-
-Definition assert_check E b (e:E) :=
-  if check then assert b e
-  else ok tt.
-
-(* TODO: move close to ptr_kind? *)
-Variant vptr_kind :=
-  | VKglob of Z * wsize
-  | VKptr  of ptr_kind.
-
-(* TODO: remove? *)
-Definition var_kind := option vptr_kind.
-
-Definition mk_mov vpk :=
-  match vpk with
-  | VKglob _ | VKptr (Pdirect _ _ _ _ Sglob) => MK_LEA
-  | _ => MK_MOV
-  end.
-
-Context
-  (shparams : slh_lowering.sh_params)
-  (saparams : stack_alloc_params).
-
-Section Section.
-
-Variables (pmap:pos_map).
-
-Section ALLOC_E.
-
-Variables (rmap: region_map).
-
-Definition get_global (x:var_i) :=
-  match Mvar.get pmap.(globals) x with
-  | None => Error (stk_ierror_basic x "unallocated global variable")
-  | Some z => ok z
-  end.
-
-Definition get_local (x:var) := Mvar.get pmap.(locals) x.
-
-Definition check_diff (x:var_i) :=
-  if Sv.mem x pmap.(vnew) then
-    Error (stk_ierror_basic x "the code writes to one of the new variables")
-  else ok tt.
-
-Definition check_var (x:var_i) :=
-  match get_local x with
-  | None => ok tt
-  | Some _ =>
-    Error (stk_error x (pp_box [::
-      pp_var x; pp_s "is a stack variable, but a reg variable is expected"]))
-  end.
-
-Definition with_var xi x :=
-  {| v_var := x; v_info := xi.(v_info) |}.
-
-Definition base_ptr sc :=
-  match sc with
-  | Slocal => pmap.(vrsp)
-  | Sglob => pmap.(vrip)
-  end.
-
-Definition addr_from_pk (x:var_i) (pk:ptr_kind) :=
-  match pk with
-  | Pdirect _ ofs _ cs sc => ok (with_var x (base_ptr sc), ofs + cs.(cs_ofs))
-  | Pregptr p             => ok (with_var x p,             0)
-  | Pstkptr _ _ _ _ _     =>
-    Error (stk_error x (pp_box [::
-      pp_var x; pp_s "is a stack pointer, it should not appear in an expression"]))
-  end%Z.
-
-Definition addr_from_vpk x (vpk:vptr_kind) :=
-  match vpk with
-  | VKglob zws => ok (with_var x pmap.(vrip), zws.1)
-  | VKptr pk => addr_from_pk x pk
-  end.
-(*
-Definition mk_addr_ptr x aa ws (pk:ptr_kind) (e1:pexpr) :=
-  Let xofs := addr_from_pk x pk in
-  ok (xofs.1, mk_ofs aa ws e1 xofs.2).
-
-Definition mk_addr x aa ws (vpk:vptr_kind) (e1:pexpr) :=
-  Let xofs := addr_from_vpk x vpk in
-  ok (xofs.1, mk_ofs aa ws e1 xofs.2).
-*)
-Definition get_var_kind x :=
-  let xv := x.(gv) in
-  if is_glob x then
-    Let z := get_global xv in
-    ok (Some (VKglob z))
-  else
-    ok (omap VKptr (get_local xv)).
 
 Definition sub_region_full x r :=
   let z := [:: {| ss_ofs := Pconst 0; ss_len := Pconst (size_slot x) |}] in
@@ -862,38 +661,20 @@ Definition get_gsub_region_status rmap (x:var_i) vpk :=
   | VKptr _pk =>
     get_sub_region_status rmap x
   end.
-(*
-Definition check_vpk rmap (x:var_i) vpk :=
-  match vpk with
-  | VKglob (_, ws) =>
-    let sr := sub_region_glob x ws in
-    ok (sr, Valid)
-  | VKptr _pk =>
-    get_sub_region_bytes rmap x
-  end.
 
-Definition check_vpk_word rmap al x vpk ofs ws :=
-  Let: (sr, sr', bytes) := check_vpk rmap x vpk ofs (wsize_size ws) in
-  Let _ := check_valid x sr' bytes in
-  check_align al x sr ws.
-*)
 
-(*
-Definition table_fresh t :=
-  let e := Pvar t.(counter) in
-  let t :=
-    {| bindings := t.(bindings);
-       counter  := Pos.succ t.(counter)
-    |}
-  in
-  (t, e).
-*)
+(* ------------------------------------------------------------------ *)
+(* Symbolic analysis *)
 
-Definition clone (x:var_i) n :=
-  let xn :=
-    fresh_var_ident (Ident.id_kind x.(vname)) n (Ident.id_name x.(vname)) x.(vtype)
-  in
-  {| v_var := {| vtype := x.(vtype); vname := xn |}; v_info := x.(v_info) |}.
+Record table := {
+  bindings : Mvar.t pexpr;
+  counter : Uint63.int;
+  vars : Sv.t;
+}.
+
+Section CLONE.
+
+Context (clone : var_i -> int -> var_i).
 
 Definition table_fresh_var t x :=
   let x' := clone x t.(counter) in
@@ -966,12 +747,169 @@ Fixpoint symbolic_of_pexpr t e :=
   end.
 
 (* A version of symbolic_of_pexpr that fails. *)
-(* hack: we compare counter to detect whether t was changed, clean this up *)
 Definition get_symbolic_of_pexpr t e :=
   let te := symbolic_of_pexpr t e in
   match te with
   | None => Error (stk_ierror_no_var "expression too complex")
   | Some te => ok te
+  end.
+
+Definition remove_binding table x :=
+  {| bindings := Mvar.remove table.(bindings) x;
+     counter := table.(counter);
+     vars := table.(vars) |}.
+
+Definition update_table table lv e :=
+  match lv with
+  | Lvar x =>
+    match symbolic_of_pexpr table e with
+    | None => remove_binding table x
+    | Some (table, e) =>
+      {| bindings := Mvar.set table.(bindings) x e;
+         counter := table.(counter);
+         vars := table.(vars) |}
+    end
+  | _ => table
+  end.
+
+End CLONE.
+
+
+Section WITH_PARAMS.
+
+Context
+  {asm_op : Type}
+  {pd : PointerData}
+  {msfsz : MSFsize}
+  {asmop : asmOp asm_op}
+.
+
+Context
+  (shparams : slh_lowering.sh_params)
+  (saparams : stack_alloc_params)
+  (is_move_op : asm_op_t -> bool)
+  (fresh_var_ident  : v_kind -> Uint63.int -> string -> stype -> Ident.ident)
+  (print_trmap : instr_info -> table -> region_map -> table * region_map)
+  (string_of_sr : sub_region -> string)
+.
+
+Definition clone (x:var_i) n :=
+  let xn :=
+    fresh_var_ident (Ident.id_kind x.(vname)) n (Ident.id_name x.(vname)) x.(vtype)
+  in
+  {| v_var := {| vtype := x.(vtype); vname := xn |}; v_info := x.(v_info) |}.
+
+Notation get_symbolic_of_pexpr := (get_symbolic_of_pexpr clone).
+Notation update_table := (update_table clone).
+
+Definition mul := Papp2 (Omul (Op_w Uptr)).
+Definition add := Papp2 (Oadd (Op_w Uptr)).
+
+(* TODO: do we need to do the check here? I think we can always return the
+   "else" version, and in a later pass, it will be recognized as a constant? *)
+(* It seems indeed that it is an optim, mk_lea recognize that it is a constant. *)
+Definition mk_ofs aa ws e1 :=
+  let sz := mk_scale aa ws in
+  if is_const e1 is Some i then
+    cast_const (i * sz)%Z
+  else
+    mul (cast_const sz) (cast_ptr e1).
+
+(* Do we want the optim for constants? *)
+Definition add_ofs ofs1 ofs2 :=
+  match is_wconst_of_size Uptr ofs1 with
+  | Some ofs1 => cast_const (ofs1 + ofs2)
+  | None => add ofs1 (cast_const ofs2)
+  end.
+
+(* For the symbolic analysis *)
+Definition mk_ofs_int aa ws e1 :=
+  let sz := mk_scale aa ws in
+  if is_const e1 is Some i then Pconst (i * sz)%Z
+  else (Papp2 (Omul Op_int) (Pconst sz) e1).
+
+Section CHECK.
+
+(* The code in this file is called twice.
+   - First, it is called from the stack alloc OCaml oracle. Indeed, the oracle
+     returns initial results, and performs stack and reg allocation using
+     these results. Based on the program that it obtains,
+     it fixes some of the results and returns them.
+   - Second, it is called as a normal compilation pass on the results returned
+     by the oracle.
+
+   When the code is called from the OCaml oracle, all the checks
+   that are performed so that the pass can be proved correct are actually not
+   needed. We introduce this boolean [check] to deactivate some of the tests
+   when the code is called from the oracle.
+
+   TODO: deactivate more tests (or even do not use rmap) when [check] is [false]
+*)
+Variable (check : bool).
+
+Definition assert_check E b (e:E) :=
+  if check then assert b e
+  else ok tt.
+
+Section LOCAL.
+
+Variables (pmap:pos_map).
+
+Section ALLOC_E.
+
+Variables (rmap: region_map).
+
+Definition get_global (x:var_i) :=
+  match Mvar.get pmap.(globals) x with
+  | None => Error (stk_ierror_basic x "unallocated global variable")
+  | Some z => ok z
+  end.
+
+Definition get_local (x:var) := Mvar.get pmap.(locals) x.
+
+Definition get_var_kind x :=
+  let xv := x.(gv) in
+  if is_glob x then
+    Let z := get_global xv in
+    ok (Some (VKglob z))
+  else
+    ok (omap VKptr (get_local xv)).
+
+Definition check_diff (x:var_i) :=
+  if Sv.mem x pmap.(vnew) then
+    Error (stk_ierror_basic x "the code writes to one of the new variables")
+  else ok tt.
+
+Definition check_var (x:var_i) :=
+  match get_local x with
+  | None => ok tt
+  | Some _ =>
+    Error (stk_error x (pp_box [::
+      pp_var x; pp_s "is a stack variable, but a reg variable is expected"]))
+  end.
+
+Definition with_var xi x :=
+  {| v_var := x; v_info := xi.(v_info) |}.
+
+Definition base_ptr sc :=
+  match sc with
+  | Slocal => pmap.(vrsp)
+  | Sglob => pmap.(vrip)
+  end.
+
+Definition addr_from_pk (x:var_i) (pk:ptr_kind) :=
+  match pk with
+  | Pdirect _ ofs _ cs sc => ok (with_var x (base_ptr sc), ofs + cs.(cs_ofs))
+  | Pregptr p             => ok (with_var x p,             0)
+  | Pstkptr _ _ _ _ _     =>
+    Error (stk_error x (pp_box [::
+      pp_var x; pp_s "is a stack pointer, it should not appear in an expression"]))
+  end%Z.
+
+Definition addr_from_vpk x (vpk:vptr_kind) :=
+  match vpk with
+  | VKglob zws => ok (with_var x pmap.(vrip), zws.1)
+  | VKptr pk => addr_from_pk x pk
   end.
 
 Definition bad_arg_number := stk_ierror_no_var "invalid number of args".
@@ -989,8 +927,6 @@ Fixpoint alloc_e (e:pexpr) ty :=
         if subtype (sword ws) (vtype xv) then
           Let: (_, status) := get_gsub_region_status rmap xv vpk in
           Let _ := check_valid xv status in
-(*           Let _ := check_vpk_word rmap Aligned xv vpk (Some 0%Z) ws in *)
-(*           Let pofs := mk_addr xv AAdirect ws vpk (Pconst 0) in *)
           Let: (p, ofs) := addr_from_vpk xv vpk in
           ok (Pload Aligned ws p (cast_const ofs))
         else Error (stk_ierror_basic xv "invalid type for expression")
@@ -1008,7 +944,6 @@ Fixpoint alloc_e (e:pexpr) ty :=
       Let _ := check_valid xv status in
       Let: (p, ofs) := addr_from_vpk xv vpk in
       let ofs := add_ofs (mk_ofs aa ws e1) ofs in
-(*       Let pofs := mk_addr xv aa ws vpk e1 in *)
       ok (Pload al ws p ofs)
     end
 
@@ -1042,7 +977,7 @@ Fixpoint alloc_e (e:pexpr) ty :=
     ok (Pif ty e e1 e2)
   end.
 
-  Definition alloc_es es ty := mapM2 bad_arg_number alloc_e es ty.
+Definition alloc_es es ty := mapM2 bad_arg_number alloc_e es ty.
 
 End ALLOC_E.
 
@@ -1060,15 +995,6 @@ Definition sub_region_pk x pk :=
   | _ => Error (stk_ierror x (pp_box [:: pp_var x; pp_s "is not in the stack"]))
   end.
 
-(* We write in variable [x]. We clear the zone corresponding to [x] for all
-   variables of the same region, and set [status] as the new status of [x]. *)
-Definition set_word rmap al sr (x:var_i) status ws :=
-  Let _ := check_writable x sr.(sr_region) in
-  Let _ := check_align al x sr ws in
-  ok
-    {| var_region := rmap.(var_region);
-       region_var := set_word_status rmap sr x status |}.
-
 Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
   match r with
   | Lnone _ _ => ok (rmap, r)
@@ -1081,7 +1007,6 @@ Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
         if subtype (sword ws) ty then
           Let sr   := sub_region_pk x pk in
           Let rmap := set_word rmap Aligned sr x Valid ws in
-(*           Let pofs := mk_addr_ptr x AAdirect ws pk (Pconst 0) in *)
           Let: (p, ofs) := addr_from_pk x pk in
           let r := Lmem Aligned ws p (cast_const ofs) in
           ok (rmap, r)
@@ -1096,7 +1021,6 @@ Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
     | Some pk =>
       Let: (sr, status) := get_sub_region_status rmap x in
       Let rmap := set_word rmap al sr x status ws in
-(*       Let pofs := mk_addr_ptr x aa ws pk e1 in *)
       Let: (p, ofs) := addr_from_pk x pk in
       let ofs := add_ofs (mk_ofs aa ws e1) ofs in
       let r := Lmem al ws p ofs in
@@ -1132,39 +1056,6 @@ Definition get_addr (x:var_i) dx tag vpk y ofs :=
     ok ir
   end.
 
-(*
-(* TODO: better error message *)
-Definition get_addr is_spilling rmap x dx tag sry bytesy vpk y ofs :=
-  let ir := if is_nop is_spilling rmap x sry
-            then Some nop
-            else sap_mov_ofs saparams dx tag vpk y ofs in
-  let rmap := Region.set_move rmap x sry bytesy in
-  (rmap, ir).
-
-Definition get_ofs_sub aa ws x e1 :=
-  match mk_ofsi aa ws e1 with
-  | None     => Error (stk_ierror_basic x "cannot take/set a subarray on a unknown starting position")
-  | Some ofs => ok ofs
-  end.
-
-Definition get_Lvar_sub lv :=
-  match lv with
-  | Lvar x => ok (x, None)
-  | Lasub aa ws len x e1 =>
-    Let ofs := get_ofs_sub aa ws x e1 in
-    ok (x, Some (ofs, arr_size ws len))
-  | _      => Error (stk_ierror_no_var "get_Lvar_sub: variable/subarray expected")
-  end.
-
-Definition get_Pvar_sub e :=
-  match e with
-  | Pvar x => ok (x, None)
-  | Psub aa ws len x e1 =>
-    Let ofs := get_ofs_sub aa ws x.(gv) e1 in
-    ok (x, Some (ofs, arr_size ws len))
-  | _      => Error (stk_ierror_no_var "get_Pvar_sub: variable/subarray expected")
-  end.
-*)
 Definition is_stack_ptr vpk :=
   match vpk with
   | VKptr (Pstkptr s ofs ws z f) => Some (s, ofs, ws, z, f)
@@ -1188,13 +1079,12 @@ Definition mk_addr_pexpr rmap x vpk :=
     Let xofs := addr_from_vpk x vpk in
     ok (Plvar xofs.1, xofs.2).
 
-(* TODO: the check [is_lvar] was removed, was it really on purpose? *)
-(* TODO : currently, we check that the source array is valid and set the target
-   array as valid too. We could, instead, give the same validity to the target
-   array as the source one.
-   [check_vpk] should be replaced with some function returning the valid bytes
-   of y...
-*)
+Definition mk_mov vpk :=
+  match vpk with
+  | VKglob _ | VKptr (Pdirect _ _ _ _ Sglob) => MK_LEA
+  | _ => MK_MOV
+  end.
+
 (* Precondition is_sarr ty *)
 Definition alloc_array_move table rmap r tag e :=
   Let: (table, sry, statusy, mk, ey, ofs) :=
@@ -1401,8 +1291,7 @@ Fixpoint incl_forest (f1 f2: symbolic_forest) : bool :=
     let: Nodes l2 := f2 in
     has (fun '(s2, f2) =>
       if symbolic_slice_beq s1 s2 then incl_forest f1 f2
-      else false) l2
-  ) l1.
+      else false) l2) l1.
 
 Definition incl_status status1 status2 :=
   match status1, status2 with
@@ -1454,23 +1343,23 @@ Definition merge (rmap1 rmap2:region_map) :=
         end) rmap1.(var_region) rmap2.(var_region);
      region_var := Mr.map2 merge_status_map rmap1.(region_var) rmap2.(region_var) |}.
 
- Definition incl_table (table1 table2 : table) := [&&
-   Mvar.incl (fun _ => eq_expr) table1.(bindings) table2.(bindings),
-   Uint63.leb table1.(counter) table2.(counter) &
-   Sv.subset table1.(vars) table2.(vars)].
+Definition incl_table (table1 table2 : table) := [&&
+  Mvar.incl (fun _ => eq_expr) table1.(bindings) table2.(bindings),
+  Uint63.leb table1.(counter) table2.(counter) &
+  Sv.subset table1.(vars) table2.(vars)].
 
- Variable ii:instr_info.
+Variable ii:instr_info.
 
- Variable check_c2 : table -> region_map -> cexec (((table * region_map) * (table * region_map)) * (pexpr * seq cmd * seq cmd) ).
+Variable check_c2 : table -> region_map -> cexec (((table * region_map) * (table * region_map)) * (pexpr * seq cmd * seq cmd) ).
 
- Fixpoint loop2 (n:nat) table (rmap:region_map) :=
-    match n with
-    | O => Error (pp_at_ii ii (stk_ierror_no_var "loop2"))
-    | S n =>
-      Let: ((table1, rmap1), (table2, rmap2), c) := check_c2 table rmap in
-      if incl_table table table2 && incl rmap rmap2 then ok (table1, rmap1, c)
-      else loop2 n (merge_table table table2) (merge rmap rmap2)
-    end.
+Fixpoint loop2 (n:nat) table (rmap:region_map) :=
+  match n with
+  | O => Error (pp_at_ii ii (stk_ierror_no_var "loop2"))
+  | S n =>
+    Let: ((table1, rmap1), (table2, rmap2), c) := check_c2 table rmap in
+    if incl_table table table2 && incl rmap rmap2 then ok (table1, rmap1, c)
+    else loop2 n (merge_table table table2) (merge rmap rmap2)
+  end.
 
 End LOOP.
 
@@ -1711,26 +1600,6 @@ Definition alloc_array_swap rmap rs t es :=
     Error (stk_error_no_var "swap: invalid args or result, only reg ptr are accepted")
   end.
 
-Definition remove_binding table x :=
-  {| bindings := Mvar.remove table.(bindings) x;
-     counter := table.(counter);
-     vars := table.(vars) |}.
-
-Definition update_table table lv e :=
-  match lv with
-  | Lvar x =>
-    match symbolic_of_pexpr table e with
-    | None => remove_binding table x
-    | Some (table, e) =>
-      {| bindings := Mvar.set table.(bindings) x e;
-         counter := table.(counter);
-         vars := table.(vars) |}
-    end
-  | _ => table
-  end.
-
-Context (is_move_op : asm_op_t -> bool).
-
 Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region_map * cmd) :=
   let (table, rmap) := trmap in
   let (ii, ir) := i in
@@ -1805,9 +1674,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
 
 End PROG.
 
-End Section.
-
-Context (is_move_op : asm_op_t -> bool).
+End LOCAL.
 
 Definition init_stack_layout (mglob : Mvar.t (Z * wsize)) sao :=
   let add (xsr: var * wsize * Z)
@@ -2021,7 +1888,7 @@ Definition alloc_fd_aux p_extra mglob (fresh_reg : string -> stype -> Ident.iden
                  (stk_ierror_no_var "sao_max_size too small")
   in
   Let: (table, rmap, body) :=
-    fmapM (alloc_i pmap local_alloc is_move_op sao) (table, rmap) fd.(f_body) in
+    fmapM (alloc_i pmap local_alloc sao) (table, rmap) fd.(f_body) in
   Let res :=
       check_results pmap rmap paramsi fd.(f_params) sao.(sao_return) fd.(f_res) in
   ok {|

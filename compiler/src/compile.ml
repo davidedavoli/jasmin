@@ -90,8 +90,8 @@ let compile (type reg regx xreg rflag cond asm_op extra_op)
 
   let memory_analysis up : Compiler.stack_alloc_oracles =
     StackAlloc.memory_analysis
-      string_of_sr
       print_trmap
+      string_of_sr
       (Printer.pp_err ~debug:!debug)
       ~debug:!debug up
   in
