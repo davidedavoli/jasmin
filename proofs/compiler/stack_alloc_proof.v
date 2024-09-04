@@ -262,8 +262,8 @@ Definition sub_region_addr es sr :=
 
 Fixpoint all_zones f : seq symbolic_zone :=
   match f with
-  | Forest.emptyf => [::[::]]
-  | Forest.Nodes l =>
+  | emptyf => [::[::]]
+  | Nodes l =>
     conc_map (fun '(s, f) =>
       map (cons s) (all_zones f)) l
     end.
@@ -491,7 +491,7 @@ Qed.
 
 (* Predicates about zone: zbetween_zone, disjoint_zones *)
 (* -------------------------------------------------------------------------- *)
-
+(*
 Definition zbetween_zone z1 z2 :=
   (z1.(z_ofs) <=? z2.(z_ofs)) && (z2.(z_ofs) + z2.(z_len) <=? z1.(z_ofs) + z1.(z_len)).
 
@@ -529,10 +529,25 @@ Proof.
   move=> /ByteSet.memP; apply.
   by rewrite /interval_of_zone /I.memi /= wsize8 !zify; lia.
 Qed.
+*)
+
+Lemma symbolic_slice_beq_sym s1 s2 :
+  symbolic_slice_beq s1 s2 = symbolic_slice_beq s2 s1.
+Proof.
+  rewrite /symbolic_slice_beq.
+  by apply/idP/idP => /andP [h1 h2]; apply /andP; split; apply eq_expr_symm.
+Qed.
 
 Lemma disjoint_zones_sym z1 z2 : disjoint_zones z1 z2 = disjoint_zones z2 z1.
-Proof. by rewrite /disjoint_zones orbC. Qed.
-
+Proof.
+  elim: z1 z2 => [|s1 z1 ih] [|s2 z2] //=.
+  rewrite symbolic_slice_beq_sym ih.
+  case: symbolic_slice_beq => //.
+  case: symbolic_slice_ble => // b1.
+  case: symbolic_slice_ble => // b2.
+  by case: b1 b2 => [] [].
+Qed.
+(*
 Lemma disjoint_zones_incl z1 z1' z2 z2' :
   zbetween_zone z1 z1' ->
   zbetween_zone z2 z2' ->
@@ -575,12 +590,12 @@ Qed.
 
 Lemma disj_sub_regions_sym sr1 sr2 : disj_sub_regions sr1 sr2 = disj_sub_regions sr2 sr1.
 Proof. by rewrite /disj_sub_regions /region_same eq_sym disjoint_zones_sym. Qed.
-
+*)
 (* Lemmas about wf_zone *)
 (* -------------------------------------------------------------------------- *)
-
+(*
 Lemma sub_zone_at_ofs_compose z ofs1 ofs2 len1 len2 :
-  sub_zone_at_ofs (sub_zone_at_ofs z (Some ofs1) len1) (Some ofs2) len2 =
+  sub_zone_at_ofs (sub_zone_at_ofs z  len1) (Some ofs2) len2 =
   sub_zone_at_ofs z (Some (ofs1 + ofs2)) len2.
 Proof. by rewrite /= Z.add_assoc. Qed.
 
@@ -625,31 +640,42 @@ Proof.
   apply (zbetween_zone_sub_zone_at_ofs hwf).
   by move=> _ [<-].
 Qed.
-
+*)
 (* Lemmas about wf_sub_region *)
 (* -------------------------------------------------------------------------- *)
 
 (* The hypothesis [size_of ty2 <= size_of ty1] is enough, but this weakest
    version is enough for our needs.
 *)
-Lemma wf_sub_region_subtype sr ty1 ty2 :
+Lemma wf_sub_region_subtype es sr ty1 ty2 :
   subtype ty2 ty1 ->
-  wf_sub_region sr ty1 ->
-  wf_sub_region sr ty2.
+  wf_sub_region es sr ty1 ->
+  wf_sub_region es sr ty2.
 Proof.
-  move=> hsub [hwf1 [hwf2 hwf3]]; split=> //; split=> //.
+  move=> hsub [hwf1 hwf2]; split=> //.
+  move=> cs /hwf2[{}hwf2 hwf3]; split=> //.
   by move /size_of_le : hsub; lia.
 Qed.
 
-Definition stype_at_ofs (ofs : option Z) (ty ty' : stype) :=
-  if ofs is None then ty' else ty.
-
-Lemma sub_region_at_ofs_wf sr ty ofs ty2 :
-  wf_sub_region sr ty ->
-  (forall zofs, ofs = Some zofs -> 0 <= zofs /\ zofs + size_of ty2 <= size_of ty) ->
-  wf_sub_region (sub_region_at_ofs sr ofs (size_of ty2)) (stype_at_ofs ofs ty2 ty).
+Lemma sub_region_at_ofs_wf es sr ty ofs ty2 :
+  wf_sub_region es sr ty ->
+  size_of ty2 <= size_of ty ->
+  wf_sub_region es (sub_region_at_ofs sr ofs (size_of ty2)) ty2.
 Proof.
-  move=> hwf hofs /=; split; first by apply hwf.(wfsr_region).
+  move=> [hwf1 hwf2] hle; split=> //.
+  move=> cs /=.
+  rewrite /sub_zone_at_ofs.
+  case hsplit: (split_last sr.(sr_zone)) => [z s].
+  case: andP.
+  - move=> [h1 h2].
+    move=> /hwf2.
+    admit.
+  - move=> _.
+    case: is_const; case: is_const; case: is_const.
+    rewrite /wf_concrete_slice
+  case hofs: eq_expr => /=.
+  case: eq_expr
+  case: (sr_zone sr) => /=.
   case: ofs hofs => [ofs|_] /=; last by apply hwf.
   move=> /(_ _ refl_equal) ?.
   split=> /=; first by auto with zarith.
