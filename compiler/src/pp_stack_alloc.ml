@@ -27,28 +27,13 @@ let pp_var_region fmt vr =
     Format.fprintf fmt "@[<h>%a -> %a@]@," pp_var (Obj.magic x) pp_sub_region sr) vr ();
   Format.fprintf fmt "@]"
 
-let rec pp_forest fmt f =
-  let pp_pair fmt (s, f) =
-    Format.fprintf fmt "%a" pp_symbolic_slice s;
-    match f with
-    | Forest.Nodes [] -> ()
-    | _ -> Format.fprintf fmt "@;%a" pp_forest f
-  in
-  let Nodes l = f in
-  match l with
-  | [] -> ()
-  | [sf] -> Format.fprintf fmt "%a" pp_pair sf
-  | _ ->
-    let pp_pair' fmt sf =
-      Format.fprintf fmt "- @[<v>%a@]" pp_pair sf
-    in
-    Format.fprintf fmt "%a" (Format.pp_print_list pp_pair') l
+let pp_interval = pp_symbolic_zone
 
 let pp_status fmt s =
   match s with
   | Valid -> Format.fprintf fmt "Valid"
   | Unknown -> Format.fprintf fmt "Unknown"
-  | Borrowed f -> Format.fprintf fmt "Borrowed: @[<v>%a@]" pp_forest f
+  | Borrowed i -> Format.fprintf fmt "Borrowed: @[<v>%a@]" pp_interval i
 
 let pp_region_var fmt rv =
   Format.fprintf fmt "@[<v>";

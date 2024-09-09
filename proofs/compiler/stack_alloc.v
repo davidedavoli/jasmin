@@ -166,13 +166,11 @@ Definition sub_region_beq sr1 sr2 :=
 
 
 (* ------------------------------------------------------------------ *)
-(* Forest *)
+(* Sequence of disjoint intervals *)
 
-Inductive symbolic_forest :=
-| Nodes : seq (symbolic_slice * symbolic_forest) -> symbolic_forest.
-
-(* empty forest *)
-Notation emptyf := (Nodes [::]).
+(* Same definition as symbolic_zone, but different semantics.
+   This is a list of disjoint symbolic_slice. *)
+Definition intervals := seq symbolic_slice.
 
 (* Conservative less-than test on symbolic slices.
    Returns [None] when it cannot decide.
@@ -183,99 +181,55 @@ Definition symbolic_slice_ble (s1 s2 : symbolic_slice) :=
   let%opt ofs2 := is_const s2.(ss_ofs) in
   Some (ofs1 + len1 <=? ofs2)%Z.
 
-Fixpoint get_sub_forest z (f : symbolic_forest) : option symbolic_forest :=
-  match z with
-  | [::] => Some f
-  | s :: z =>
-    let: Nodes l := f in
-    if l is [::] then Some f
+(* true : Valid, false : Unknown *)
+(* With just one-level precision, a sub-status is either fully Valid
+   or fully Unknown (actually, we could be a bit more precise, especially
+   with constants, but currently we stay simple). *)
+Fixpoint get_sub_interval (i : intervals) s : bool :=
+  match i with
+  | [::] => true (* valid *)
+  | s' :: i =>
+    if symbolic_slice_beq s s' then false (* fully borrowed: unknown *)
+    else if odflt false (symbolic_slice_ble s s') then true (* valid *)
+    else if odflt false (symbolic_slice_ble s' s) then get_sub_interval i s
     else
-      let fix aux l :=
-        match l with
-        | [::] => None
-        | (s', f') :: l =>
-          if symbolic_slice_beq s s' then get_sub_forest z f'
-          else if odflt false (symbolic_slice_ble s s') then None
-          else if odflt false (symbolic_slice_ble s' s) then aux l
-          else
-            Some emptyf
-        end
-      in
-      aux l
+      false (* non-disjoint: unknown *)
   end.
 
-Fixpoint init_forest (z : symbolic_zone) (f : symbolic_forest) :=
-  match z with
-  | [::] => f
-  | s :: z => Nodes [:: (s, init_forest z f)]
+(* We add a slice, meaning we get closer to Unknown.
+  [None] as a return value means Unknown *)
+Fixpoint add_sub_interval (i : intervals) s : option intervals :=
+  match i with
+  | [::] => Some [:: s]
+  | s' :: i' =>
+    if symbolic_slice_beq s s' then Some i (* s was already borrowed *)
+    else if odflt false (symbolic_slice_ble s s') then Some (s :: i)
+    else if odflt false (symbolic_slice_ble s' s) then
+      let%opt i'' := add_sub_interval i' s in
+      Some (s' :: i'')
+    else
+      None (* non-disjoint: unknown *)
   end.
 
-Fixpoint insert_sub_forest (f : symbolic_forest) z (subf : option symbolic_forest) : option symbolic_forest :=
-  match z with
-  | [::] => subf
-  | s :: z =>
-    let: Nodes l := f in
-    if l is [::] then Some f
+(* We remove a slice, meaning we get closer to Valid. *)
+Fixpoint remove_sub_interval (i : intervals) s : intervals :=
+  match i with
+  | [::] => [::]
+  | s' :: i' =>
+    if symbolic_slice_beq s s' then i'
+    else if odflt false (symbolic_slice_ble s s') then i
     else
-      let fix aux (l:seq (symbolic_slice * symbolic_forest)) :=
-        match l with
-        | [::] =>
-          match subf with
-          | None => Some [::]
-          | Some subf => Some [:: (s, init_forest z subf)]
-          end
-        | ((s', f') as tree) :: l' =>
-          if symbolic_slice_beq s s' then
-            match insert_sub_forest f' z subf with
-            | None => Some l'
-            | Some f => Some ((s, f) :: l')
-            end
-          else if odflt false (symbolic_slice_ble s s') then
-            match subf with
-            | None => Some l
-            | Some subf => Some ((s, init_forest z subf) :: l)
-            end
-          else if odflt false (symbolic_slice_ble s' s) then
-            let%opt l' := aux l' in
-            Some (tree :: l')
-          else (* not disjoint (or at least it was not proved) *)
-            match is_const s.(ss_ofs), is_const s.(ss_len), is_const s'.(ss_ofs), is_const s'.(ss_len) with
-            | Some ofs, Some len, Some ofs', Some len' =>
-              (* special case: everything is constant, and [subf] is None (meaning Valid)
-                 -> we check inclusion of s' in s and if ok, we remove [s']
-                 Otherwise, we return None (meaning Unknown) *)
-              if ((ofs <=? ofs') && (ofs' + len' <=? ofs + len))%Z then
-                match subf with
-                | None =>
-                  let%opt l' := aux l' in
-                  Some l'
-                | Some _ => None
-                end
-              else None
-            | _, _, _, _ =>
-              None
-            end
-        end
-      in
-      match aux l with
-      | None => Some emptyf
-      | Some [::] => None
-      | Some l => Some (Nodes l)
+      (* special case: everything is constant
+         -> we check inclusion of s' in s and if ok, we remove [s']
+         otherwise, we don't know, so we conservatively keep s' and we make a recursive call *)
+      match is_const s.(ss_ofs), is_const s.(ss_len), is_const s'.(ss_ofs), is_const s'.(ss_len) with
+      | Some ofs, Some len, Some ofs', Some len' =>
+        if ((ofs <=? ofs') && (ofs' + len' <=? ofs + len))%Z then
+          remove_sub_interval i' s
+        else
+          s' :: remove_sub_interval i' s
+      | _, _, _, _ => s' :: remove_sub_interval i' s
       end
-  end.
-(* pour la récursion interne:
-    si la liste est vide : elle reste vide
-    si la liste contient des choses disjointes : on ajoute
-    - si on est None : on retire et on renvoie None
-    si la liste contient s : on remplace et on appelle récursivement
-    - si on est None : on retire et on renvoie None
-    sinon, on est potentiellement non disjoint : on passe à liste vide
-*)
-
-Definition insert_sub_oforest (f : option symbolic_forest) z (subf : option symbolic_forest) : option symbolic_forest :=
-  match f with
-  | None => omap (init_forest z) subf
-  | Some f => insert_sub_forest f z subf
   end.
 
 
@@ -294,7 +248,7 @@ Variant status :=
   (* The sub-region is fully valid, we can read everywhere. *)
 | Unknown
   (* We don't know anything about the sub-region, we cannot read anywhere. *)
-| Borrowed of symbolic_forest.
+| Borrowed of intervals.
   (* Some parts of the sub-region are "borrowed" by other variables, we cannot
      read in them. We remember a forest of disjoint symbolic zones
      that are borrowed. *)
@@ -466,18 +420,39 @@ Fixpoint split_last z :=
 Definition sub_zone_at_ofs (z:symbolic_zone) ofs len :=
   (* TODO: z is never nil, but check this *)
   let: (z', s) := split_last z in
-  if eq_expr ofs (Pconst 0) && eq_expr len s.(ss_len) then z
-  else
     match is_const s.(ss_ofs), is_const s.(ss_len), is_const ofs, is_const len with
     | Some sofs, Some slen, Some ofs, Some len => z' ++ [:: {| ss_ofs := Pconst (sofs + ofs); ss_len := len |}]
     | _, _, _, _ =>
       z ++ [:: {| ss_ofs := ofs; ss_len := len |}]
     end.
 
+(* This function does not have the special case for full sub-arrays.
+   Use sub_region_status_at_ofs instead! *)
 Definition sub_region_at_ofs sr ofs len :=
   {| sr_region := sr.(sr_region);
      sr_zone   := sub_zone_at_ofs sr.(sr_zone) ofs len
   |}.
+
+(* true : Valid, false : Unknown *)
+Definition get_sub_status (status:status) s :=
+  match status with
+  | Valid => true
+  | Unknown => false
+  | Borrowed i => get_sub_interval i s
+  end.
+
+Definition sub_region_status_at_ofs (x:var_i) sr status ofs len :=
+  if eq_expr ofs (Pconst 0) && eq_expr len (Pconst (size_slot x)) then
+    (sr, status)
+  else
+    let sr := sub_region_at_ofs sr ofs len in
+    let status :=
+      if get_sub_status status {| ss_ofs := ofs; ss_len := len |} then
+        Valid
+      else
+        Unknown
+    in
+    (sr, status).
 
 (* None => non-disjoint zones, error
    Some None => disjoint zones
@@ -507,47 +482,47 @@ Fixpoint get_suffix (z1 z2 : symbolic_zone) : option (option symbolic_zone) :=
     end
   end.
 
-Definition get_sub_status z (status:status) :=
-  match status with
-  | Valid => Valid
-  | Unknown => Unknown
-  | Borrowed l =>
-    match get_sub_forest z l with
-    | None => Valid
-    | Some emptyf => Unknown
-    | Some l => Borrowed l
-    end
-  end.
-
-Definition insert_status status z subf :=
+Definition fill_status status (z:symbolic_zone) :=
   match z with
-  | None => Some status
-  | Some z =>
-    let f :=
-      match status with
-      | Valid => None
-      | Unknown => Some emptyf
-      | Borrowed f => Some f
+  | [::] => Valid
+  | s :: _ =>
+    match status with
+    | Valid => Valid
+    | Unknown => Unknown
+    | Borrowed i =>
+      match remove_sub_interval i s with
+      | [::] => Valid
+      | i => Borrowed i
       end
-    in
-    let f := insert_sub_oforest f z subf in
-    match f with
-    | None => Some Valid
-    | Some emptyf => None (* Unknown *)
-    | Some f => Some (Borrowed f)
     end
   end.
 
-(* Clearing is equivalent to inserting empty. *)
-Definition clear_status rmap z x status :=
+(* None as a return value means Unknown *)
+Definition clear_status status (z:symbolic_zone) :=
+  match z with
+  | [::] => None
+  | s :: _ =>
+    match status with
+    | Valid => Some (Borrowed [:: s])
+    | Unknown => None
+    | Borrowed i =>
+      let%opt i := add_sub_interval i s in
+      Some (Borrowed i)
+    end
+  end.
+
+Definition clear_status_map_aux rmap z x status :=
   let%opt z :=
     let%opt sr := Mvar.get rmap.(var_region) x in
     get_suffix sr.(sr_zone) z
   in
-  insert_status status z (Some emptyf).
+  match z with
+  | None => Some status (* z is disjoint, we keep the same status *)
+  | Some z => clear_status status z
+  end.
 
 Definition clear_status_map rmap z (sm:status_map) :=
-  Mvar.filter_map (clear_status rmap z) sm.
+  Mvar.filter_map (clear_status_map_aux rmap z) sm.
 
 Definition set_clear_status (rmap:region_map) sr :=
   let sm := get_status_map rmap sr.(sr_region) in
@@ -595,21 +570,22 @@ Definition set_move (rmap:region_map) x sr status :=
   {| var_region := Mvar.set rmap.(var_region) x sr;
      region_var := rv |}.
 
-Definition set_move_sub_status rv r x status z substatus :=
-  let f :=
-    match substatus with
-    | Valid => None
-    | Unknown => Some emptyf
-    | Borrowed l => Some l
-    end
+Definition set_move_sub_status rv r x status ofs len statusy :=
+  let status :=
+    if eq_expr ofs (Pconst 0) && eq_expr len (Pconst (size_slot x)) then statusy
+    else
+      let s := {| ss_ofs := ofs; ss_len := len |} in
+      if get_sub_status statusy s then
+        fill_status status [:: s]
+      else
+        odflt Unknown (clear_status status [:: s])
   in
-  let status := odflt Unknown (insert_status status z f) in
   let sm := get_status_map rv r in
   let sm := set_status sm x status in
   Mr.set rv r sm.
 
-Definition set_move_sub (rmap:region_map) r x status z substatus :=
-  let rv := set_move_sub_status rmap r x status z substatus in
+Definition set_move_sub (rmap:region_map) r x ofs len status substatus :=
+  let rv := set_move_sub_status rmap r x ofs len status substatus in
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
@@ -1103,17 +1079,11 @@ Definition alloc_array_move table rmap r tag e :=
       | Some vpk =>
         Let: (sr, status) := get_gsub_region_status rmap yv vpk in
         Let: (table, se1) := get_symbolic_of_pexpr table e1 in
-        let ofs := mk_ofs aa ws e1 in
-        let sr' := sub_region_at_ofs sr (mk_ofs_int aa ws se1) (Pconst (arr_size ws len)) in
-        Let z :=
-          match get_suffix sr.(sr_zone) sr'.(sr_zone) with
-          | Some (Some z) => ok z
-          | _ => Error (stk_ierror_no_var "not a sub-region")
-          end
-        in
-        let status := get_sub_status z status in
+        let ofs := mk_ofs_int aa ws se1 in
+        let len := Pconst (arr_size ws len) in
+        let (sr, status) := sub_region_status_at_ofs yv sr status ofs len in
         Let eofs := mk_addr_pexpr rmap yv vpk in
-        ok (table, sr', status, mk_mov vpk, eofs.1, add_ofs ofs eofs.2)
+        ok (table, sr, status, mk_mov vpk, eofs.1, add_ofs (mk_ofs aa ws e1) eofs.2)
       end
     | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (y)")
     end
@@ -1164,7 +1134,8 @@ Definition alloc_array_move table rmap r tag e :=
       Let: (sr, status) := get_sub_region_status rmap x in
       Let: (table, e) := get_symbolic_of_pexpr table e in
       let ofs := mk_ofs_int aa ws e in
-      let sr' := sub_region_at_ofs sr ofs (Pconst (arr_size ws len)) in
+      let len := Pconst (arr_size ws len) in
+      let (sr', _) := sub_region_status_at_ofs x sr status ofs len in
       Let _ :=
         assert (sub_region_beq sr' sry)
                (stk_ierror x
@@ -1178,13 +1149,7 @@ Definition alloc_array_move table rmap r tag e :=
                    ];
                    pp_s ") regions are not equal"]))
       in
-      Let z :=
-        match get_suffix sr.(sr_zone) sr'.(sr_zone) with
-        | Some z => ok z
-        | _ => Error (stk_ierror_no_var "not a sub-region (sub)")
-        end
-      in
-      let rmap := set_move_sub rmap sr.(sr_region) x status z statusy in
+      let rmap := set_move_sub rmap sr.(sr_region) x status ofs len statusy in
       ok (table, rmap, nop)
     end
 
@@ -1281,19 +1246,14 @@ Definition alloc_lvals rmap rs tys :=
 
 Section LOOP.
 
-Fixpoint incl_forest (f1 f2: symbolic_forest) : bool :=
-  let: Nodes l1 := f1 in
-  all (fun '(s1, f1) =>
-    let: Nodes l2 := f2 in
-    has (fun '(s2, f2) =>
-      if symbolic_slice_beq s1 s2 then incl_forest f1 f2
-      else false) l2) l1.
+Definition incl_interval (i1 i2: intervals) : bool :=
+  all (fun s1 => has (symbolic_slice_beq s1) i2) i1.
 
 Definition incl_status status1 status2 :=
   match status1, status2 with
   | Unknown, _ => true
   | _, Valid => true
-  | Borrowed f1, Borrowed f2 => incl_forest f2 f1
+  | Borrowed i1, Borrowed i2 => incl_interval i2 i1
   | _, _ => false
   end.
 
@@ -1304,11 +1264,10 @@ Definition incl (rmap1 rmap2:region_map) :=
   Mvar.incl (fun x r1 r2 => sub_region_beq r1 r2) rmap1.(var_region) rmap2.(var_region) &&
   Mr.incl (fun _ => incl_status_map) rmap1.(region_var) rmap2.(region_var).
 
-Definition merge_forest (f1 f2 : symbolic_forest) :=
-  let: Nodes l1 := f1 in
-  foldl (fun acc '(s, f) =>
+Definition merge_interval (i1 i2 : intervals) :=
+  foldl (fun acc s =>
     let%opt acc := acc in
-    insert_sub_forest acc [:: s] (Some f)) (Some f2) l1.
+    add_sub_interval acc s) (Some i2) i1.
 
 Definition merge_status (_x:var) (status1 status2: option status) :=
   let%opt status1 := status1 in
@@ -1316,9 +1275,9 @@ Definition merge_status (_x:var) (status1 status2: option status) :=
   match status1, status2 with
   | Unknown, _ | _, Unknown => None
   | Valid, s | s, Valid => Some s
-  | Borrowed f1, Borrowed f2 =>
-    let%opt f := merge_forest f1 f2 in
-    Some (Borrowed f)
+  | Borrowed i1, Borrowed i2 =>
+    let%opt i := merge_interval i1 i2 in
+    Some (Borrowed i)
   end.
 
 Definition merge_status_map (_r:region) (bm1 bm2: option status_map) :=
