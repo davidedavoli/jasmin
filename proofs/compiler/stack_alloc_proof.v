@@ -207,20 +207,24 @@ Record wf_region (r : region) := {
 }.
 
 (* We interpret a symbolic_slice as a concrete_slice *)
-Definition sem_slice (es:estate) (s : symbolic_slice) : result error concrete_slice :=
-  Let ofs := sem_pexpr true [::] es s.(ss_ofs) >>= to_int in
-  Let len := sem_pexpr true [::] es s.(ss_len) >>= to_int in
+(* [se] is for symbolic estate *)
+Definition sem_slice (se:estate) (s : symbolic_slice) : result error concrete_slice :=
+  Let ofs := sem_pexpr true [::] se s.(ss_ofs) >>= to_int in
+  Let len := sem_pexpr true [::] se s.(ss_len) >>= to_int in
   ok {| cs_ofs := ofs; cs_len := len |}.
 
 (* We interpret a symbolic_zone also as a concrete_slice *)
-Fixpoint sem_zone es z :=
+Fixpoint sem_zone se z :=
   match z with
-  | [::] => Error ErrOob
-  | [:: s] => sem_slice es s
-  | s :: z =>
-    Let cs1 := sem_slice es s in
-    Let cs2 := sem_zone es z in
-    ok {| cs_ofs := cs1.(cs_ofs) + cs2.(cs_ofs); cs_len := cs2.(cs_len) |}
+  | [::] => type_error
+  | [:: s] => sem_slice se s
+  | s :: z => 
+    Let cs1 := sem_slice se s in
+    Let cs2 := sem_zone se z in
+    if (0 <=? cs2.(cs_ofs)) && (cs2.(cs_ofs) + cs2.(cs_len) <=? cs1.(cs_len)) then
+      ok {| cs_ofs := cs1.(cs_ofs) + cs2.(cs_ofs); cs_len := cs2.(cs_len) |}
+    else
+      Error ErrOob
   end.
 
 (* Well-formedness of a [concrete_slice]. *)
@@ -231,20 +235,21 @@ Record wf_concrete_slice (cs : concrete_slice) (ty : stype) (sl : slot) := {
     (* the zone is a small enough to be in slot [sl] *)
 }.
 
-Definition wf_zone es z ty sl :=
-  forall cs, sem_zone es z = ok cs ->
-  wf_concrete_slice cs ty sl.
+Definition wf_zone se z ty sl :=
+  exists2 cs,
+    sem_zone se z = ok cs &
+    wf_concrete_slice cs ty sl.
 
 (* Well-formedness of a [sub_region]. *)
-Record wf_sub_region es (sr : sub_region) ty := {
+Record wf_sub_region se (sr : sub_region) ty := {
   wfsr_region :> wf_region sr.(sr_region);
-  wfsr_zone   :> wf_zone es sr.(sr_zone) ty sr.(sr_region).(r_slot)
+  wfsr_zone   :> wf_zone se sr.(sr_zone) ty sr.(sr_region).(r_slot)
 }.
 
-Definition wfr_WF es (rmap : region_map) :=
+Definition wfr_WF se (rmap : region_map) :=
   forall x sr,
     Mvar.get rmap.(var_region) x = Some sr ->
-    wf_sub_region es sr x.(vtype).
+    wf_sub_region se sr x.(vtype).
 
 (* This allows to read uniformly in words and arrays. *)
 Definition get_val_byte v off :=
@@ -256,40 +261,32 @@ Definition get_val_byte v off :=
   |_ => type_error
   end.
 
-Definition sub_region_addr es sr :=
-  Let cs := sem_zone es sr.(sr_zone) in
+Definition sub_region_addr se sr :=
+  Let cs := sem_zone se sr.(sr_zone) in
   ok (Addr sr.(sr_region).(r_slot) + wrepr _ cs.(cs_ofs))%R.
-
-Fixpoint all_zones f : seq symbolic_zone :=
-  match f with
-  | emptyf => [::[::]]
-  | Nodes l =>
-    conc_map (fun '(s, f) =>
-      map (cons s) (all_zones f)) l
-    end.
 
 Definition offset_in_concrete_slice cs off :=
   ((cs.(cs_ofs) <=? off) && (off <? cs.(cs_ofs) + cs.(cs_len)))%Z.
 
-Definition valid_offset es status off : Prop :=
+Definition valid_offset se status off : Prop :=
   match status with
   | Valid => true
   | Unknown => false
-  | Borrowed f =>
-    forall z cs, List.In z (all_zones f) ->
-    sem_zone es z = ok cs ->
+  | Borrowed i =>
+    forall s cs, List.In s i ->
+    sem_zone se [:: s] = ok cs ->
     offset_in_concrete_slice cs off
   end.
 
-Definition eq_sub_region_val_read es (m2:mem) sr status v :=
+Definition eq_sub_region_val_read se (m2:mem) sr status v :=
   forall off ofs w,
-     sub_region_addr es sr = ok ofs ->
-     valid_offset es status off ->
+     sub_region_addr se sr = ok ofs ->
+     valid_offset se status off ->
      get_val_byte v off = ok w ->
      read m2 Aligned (ofs + wrepr _ off)%R U8 = ok w.
 
-Definition eq_sub_region_val es ty m2 sr bytes v :=
-  eq_sub_region_val_read es m2 sr bytes v /\
+Definition eq_sub_region_val se ty m2 sr bytes v :=
+  eq_sub_region_val_read se m2 sr bytes v /\
   (* According to the psem semantics, a variable of type [sword ws] can store
      a value of type [sword ws'] of shorter size (ws' <= ws).
      But actually, this is used only for register variables.
@@ -333,34 +330,34 @@ Definition f rmap x :=
   get_gsub_region_status rmap x.(gv) vpk.
 *)
 
-Definition wfr_VAL es (rmap:region_map) (s1:estate) (s2:estate) :=
+Definition wfr_VAL se (rmap:region_map) (s1:estate) (s2:estate) :=
   forall x sr bytes v, check_gvalid rmap x = Some (sr, bytes) -> 
     get_gvar true gd s1.(evm) x = ok v ->
-    eq_sub_region_val es x.(gv).(vtype) s2.(emem) sr bytes v.
+    eq_sub_region_val se x.(gv).(vtype) s2.(emem) sr bytes v.
 
-Definition valid_pk es rmap (s2:estate) sr pk :=
+Definition valid_pk se rmap (s2:estate) sr pk :=
   match pk with
   | Pdirect s ofs ws cs sc =>
     sr = sub_region_direct s ws cs sc
   | Pstkptr s ofs ws z f =>
     check_stack_ptr rmap s ws z f ->
     forall pofs ofs,
-    sub_region_addr es (sub_region_stkptr s ws z) = ok pofs ->
-    sub_region_addr es sr = ok ofs ->
+    sub_region_addr se (sub_region_stkptr s ws z) = ok pofs ->
+    sub_region_addr se sr = ok ofs ->
     read s2.(emem) Aligned pofs Uptr = ok ofs
   | Pregptr p =>
-    forall ofs, sub_region_addr es sr = ok ofs ->
+    forall ofs, sub_region_addr se sr = ok ofs ->
     s2.(evm).[p] = Vword ofs
   end.
 
-Definition wfr_PTR es (rmap:region_map) (s2:estate) :=
+Definition wfr_PTR se (rmap:region_map) (s2:estate) :=
   forall x sr, Mvar.get (var_region rmap) x = Some sr ->
-    exists pk, get_local pmap x = Some pk /\ valid_pk es rmap s2 sr pk.
+    exists pk, get_local pmap x = Some pk /\ valid_pk se rmap s2 sr pk.
 
-Class wf_rmap es (rmap:region_map) (s1:estate) (s2:estate) := {
-  wfr_wf  : wfr_WF es rmap;
+Class wf_rmap se (rmap:region_map) (s1:estate) (s2:estate) := {
+  wfr_wf  : wfr_WF se rmap;
     (* sub-regions in [rmap] are well-formed *)
-  wfr_val : wfr_VAL es rmap s1 s2;
+  wfr_val : wfr_VAL se rmap s1 s2;
     (* [rmap] remembers for each relevant program variable which part of the target
        memory contains the value that this variable has in the source. These pieces
        of memory can be safely read without breaking semantics preservation.
@@ -369,7 +366,7 @@ Class wf_rmap es (rmap:region_map) (s1:estate) (s2:estate) := {
        the corresponding byte in the source. If a byte is not set, then there
        is no information.
     *)
-  wfr_ptr : wfr_PTR es rmap s2;
+  wfr_ptr : wfr_PTR se rmap s2;
     (* a variable in [rmap] is also in [pmap] and there is a link between
        the values associated to this variable in both maps *)
 }.
@@ -384,7 +381,7 @@ Hypothesis wf_pmap0 : wf_pmap.
    [s1]: current source estate
    [s2]: current target estate
 *)
-Class valid_state es (rmap : region_map) (m0 : mem) (s1 s2 : estate) := {
+Class valid_state se (rmap : region_map) (m0 : mem) (s1 s2 : estate) := {
   vs_scs         : s1.(escs) = s2.(escs);
   vs_slot_valid  : slot_valid s2.(emem);
     (* slots are valid in the target *)
@@ -404,7 +401,7 @@ Class valid_state es (rmap : region_map) (m0 : mem) (s1 s2 : estate) := {
   vs_eq_vm       : eq_vm s1.(evm) s2.(evm);
     (* registers already present in the source program store the same values
        in the source and in the target *)
-  vs_wf_region   : wf_rmap es rmap s1 s2;
+  vs_wf_region   : wf_rmap se rmap s1 s2;
     (* cf. [wf_rmap] definition *)
   vs_eq_mem      : eq_mem_source s1.(emem) s2.(emem);
     (* the memory that is already valid in the source is the same in the target *)
@@ -419,32 +416,31 @@ Existing Instance vs_wf_region.
 (* We extend some predicates with the global case. *)
 (* -------------------------------------------------------------------------- *)
 
-Lemma sub_region_glob_wf es x ofs ws :
+Lemma sub_region_glob_wf se x ofs ws :
   wf_global x ofs ws ->
-  wf_sub_region es (sub_region_glob x ws) x.(vtype).
+  wf_sub_region se (sub_region_glob x ws) x.(vtype).
 Proof.
   move=> [*]; split.
   + by split=> //; apply /idP.
-  move=> cs.
-  rewrite /= /sem_slice /= => -[<-].
+  eexists; first by reflexivity.
   by split=> /=; lia.
 Qed.
 
-Lemma check_gvalid_wf es rmap x sr_bytes :
-  wfr_WF es rmap ->
+Lemma check_gvalid_wf se rmap x sr_bytes :
+  wfr_WF se rmap ->
   check_gvalid rmap x = Some sr_bytes ->
-  wf_sub_region es sr_bytes.1 x.(gv).(vtype).
+  wf_sub_region se sr_bytes.1 x.(gv).(vtype).
 Proof.
   move=> hwfr.
   rewrite /check_gvalid; case: (@idP (is_glob x)) => hg.
-  + by case heq: Mvar.get => [[??]|//] [<-] /=; apply (sub_region_glob_wf es (wf_globals heq)).
+  + by case heq: Mvar.get => [[??]|//] [<-] /=; apply (sub_region_glob_wf se (wf_globals heq)).
   by case heq: Mvar.get => // -[<-]; apply hwfr.
 Qed.
 
-Definition valid_vpk es rv s2 x sr vpk :=
+Definition valid_vpk se rv s2 x sr vpk :=
   match vpk with
   | VKglob (_, ws) => sr = sub_region_glob x ws
-  | VKptr pk => valid_pk es rv s2 sr pk
+  | VKptr pk => valid_pk se rv s2 sr pk
   end.
 
 Lemma get_globalP x z : get_global pmap x = ok z <-> Mvar.get pmap.(globals) x = Some z.
@@ -454,11 +450,11 @@ Proof.
 Qed.
 
 (* A variant of [wfr_PTR] for [gvar]. *)
-Lemma wfr_gptr es rmap s1 s2 x sr bytes :
-  wf_rmap es rmap s1 s2 ->
+Lemma wfr_gptr se rmap s1 s2 x sr bytes :
+  wf_rmap se rmap s1 s2 ->
   check_gvalid rmap x = Some (sr, bytes) ->
   exists vpk, get_var_kind pmap x = ok (Some vpk)
-  /\ valid_vpk es rmap s2 x.(gv) sr vpk.
+  /\ valid_vpk se rmap s2 x.(gv) sr vpk.
 Proof.
   move=> hrmap.
   rewrite /check_gvalid /get_var_kind.
@@ -598,10 +594,11 @@ Lemma sub_zone_at_ofs_compose z ofs1 ofs2 len1 len2 :
   sub_zone_at_ofs (sub_zone_at_ofs z  len1) (Some ofs2) len2 =
   sub_zone_at_ofs z (Some (ofs1 + ofs2)) len2.
 Proof. by rewrite /= Z.add_assoc. Qed.
-
-Lemma wf_zone_len_gt0 z ty sl : wf_zone z ty sl -> 0 < z.(z_len).
+*)
+Lemma wf_concrete_slice_len_gt0 cs ty sl :
+  wf_concrete_slice cs ty sl -> 0 < cs.(cs_len).
 Proof. by move=> [? _]; have := size_of_gt0 ty; lia. Qed.
-
+(*
 Lemma zbetween_zone_sub_zone_at_ofs z ty sl ofs len :
   wf_zone z ty sl ->
   (forall zofs, ofs = Some zofs -> 0 <= zofs /\ zofs + len <= size_of ty) ->
@@ -647,20 +644,53 @@ Qed.
 (* The hypothesis [size_of ty2 <= size_of ty1] is enough, but this weakest
    version is enough for our needs.
 *)
-Lemma wf_sub_region_subtype es sr ty1 ty2 :
+Lemma wf_sub_region_subtype se sr ty1 ty2 :
   subtype ty2 ty1 ->
-  wf_sub_region es sr ty1 ->
-  wf_sub_region es sr ty2.
+  wf_sub_region se sr ty1 ->
+  wf_sub_region se sr ty2.
 Proof.
   move=> hsub [hwf1 hwf2]; split=> //.
-  move=> cs /hwf2[{}hwf2 hwf3]; split=> //.
+  case: hwf2 => cs ok_cs [wf_cs1 wf_cs2].
+  exists cs => //; split=> //.
   by move /size_of_le : hsub; lia.
 Qed.
+(*
+Lemma sem_zone_rcons se z s cs :
+  z <> [::] ->
+  sem_zone se (z ++ [:: s]) = ok cs ->
+  exists cs1 cs2,
+    sem_zone se z = ok cs1 /\
+    sem_slice se s = ok cs2 /\
+    cs = {| cs_ofs := cs1.(cs_ofs) + cs2.(cs_ofs); cs_len := cs2.(cs_len) |}.
+Proof.
+  elim: z cs => // s' z' ih cs _.
+  have: z' = [::] \/ z' <> [::].
+  + by case: (z'); [left|right].
+  case.
+  + move=> ?; subst z'.
+    simpl. t_xrbindP. move=> cs1 ok_cs1 cs2 ok_cs2 <-.
+    exists cs1, cs2. done.
+  move=> /ih{}ih. simpl.
+  case h: (_ ++ _).
+  case: (z') h => //.
+  t_xrbindP. move=> cs1 ok_cs1 cs2 ok_cs2.
+  rewrite -h in ok_cs2.
+  have := ih _ ok_cs2.
+  move=> [cs3 [cs4 [ok_cs3 [ok_cs4]]]].
+  move=> h1 h2.
+  exists {| cs_ofs := cs1.(cs_ofs) + cs3.(cs_ofs); cs_len := cs3.(cs_len) |}, cs4.
+  case: z' {ih h} ok_cs2 ok_cs3. done.
+  move=> sz' z' ok_cs2 ok_cs3.
+  rewrite ok_cs4. rewrite ok_cs1 ok_cs3 /=.
+  split. done. split=> //.
+  rewrite -h2 h1. simpl.
+  rewrite Z.add_assoc. done.
+Qed.
 
-Lemma sub_region_at_ofs_wf es sr ty ofs ty2 :
-  wf_sub_region es sr ty ->
+Lemma sub_region_at_ofs_wf se sr ty ofs ty2 :
+  wf_sub_region se sr ty ->
   size_of ty2 <= size_of ty ->
-  wf_sub_region es (sub_region_at_ofs sr ofs (size_of ty2)) ty2.
+  wf_sub_region se (sub_region_at_ofs sr ofs (size_of ty2)) ty2.
 Proof.
   move=> [hwf1 hwf2] hle; split=> //.
   move=> cs /=.
@@ -703,19 +733,26 @@ Proof.
   apply (sub_region_at_ofs_wf hwf (ofs:=Some ofs)).
   by move=> _ [<-] /=; rewrite wsize8; lia.
 Qed.
+*)
 
-Lemma wunsigned_sub_region_addr sr ty :
-  wf_sub_region sr ty ->
-  wunsigned (sub_region_addr sr) = wunsigned (Addr sr.(sr_region).(r_slot)) + sr.(sr_zone).(z_ofs).
+Lemma wunsigned_sub_region_addr se sr ty cs :
+  wf_sub_region se sr ty ->
+  sem_zone se sr.(sr_zone) = ok cs ->
+  exists2 w,
+    sub_region_addr se sr = ok w &
+    wunsigned w = wunsigned (Addr sr.(sr_region).(r_slot)) + cs.(cs_ofs).
 Proof.
-  move=> hwf; apply wunsigned_add.
-  have hlen := wf_zone_len_gt0 hwf.
-  have hofs := wfz_ofs hwf.
+  move=> [hwf [cs2 ok_cs wf_cs]]; rewrite ok_cs => -[?]; subst cs2.
+  rewrite /sub_region_addr; rewrite ok_cs /=.
+  eexists; first by reflexivity.
+  apply wunsigned_add.
+  have hlen := wf_concrete_slice_len_gt0 wf_cs.
+  have hofs := wfcs_ofs wf_cs.
   have /ZleP hno := addr_no_overflow (wfr_slot hwf).
   have ? := wunsigned_range (Addr (sr.(sr_region).(r_slot))).
   by lia.
 Qed.
-
+(*
 Lemma zbetween_sub_region_addr sr ty :
   wf_sub_region sr ty ->
   zbetween (Addr sr.(sr_region).(r_slot)) (size_slot sr.(sr_region).(r_slot))
@@ -776,14 +813,15 @@ Proof.
   apply: (zbetween_sub_region_at_ofs hwf).
   by move=> _ [<-].
 Qed.
+*)
 
 (* [valid_state]'s clauses deal about U8 only. We show extended versions valid
    for any [ws].
 *)
 (* -------------------------------------------------------------------------- *)
 
-Lemma valid_incl_word rmap m0 s1 s2 al p ws :
-  valid_state rmap m0 s1 s2 ->
+Lemma valid_incl_word se rmap m0 s1 s2 al p ws :
+  valid_state se rmap m0 s1 s2 ->
   validw s1.(emem) al p ws ->
   validw s2.(emem) al p ws.
 Proof.
@@ -794,8 +832,8 @@ Proof.
   exact: hvalid.
 Qed.
 
-Lemma eq_mem_source_word rmap m0 s1 s2 al p ws :
-  valid_state rmap m0 s1 s2 ->
+Lemma eq_mem_source_word se rmap m0 s1 s2 al p ws :
+  valid_state se rmap m0 s1 s2 ->
   validw s1.(emem) al p ws ->
   read s1.(emem) al p ws = read s2.(emem) al p ws.
 Proof.
@@ -808,27 +846,21 @@ Proof.
 Qed.
 
 (* [eq_sub_region_val_read] deals with 1-byte words. This lemma extends it to
-   words of arbitrary sizes.
-*)
-Lemma eq_sub_region_val_read_word sr ty s2 (v : value) bytes ofs al ws i w :
-  wf_sub_region sr ty ->
-  eq_sub_region_val_read (emem s2) sr bytes v ->
-  ByteSet.mem bytes (interval_of_zone (sub_zone_at_ofs sr.(sr_zone) ofs (wsize_size ws))) ->
-  (ofs <> None -> ofs = Some i) ->
-  0 <= i /\ i + wsize_size ws <= size_of ty ->
-  (forall k, 0 <= k < wsize_size ws -> get_val_byte v (i + k) = ok (LE.wread8 w k)) ->
-  read (emem s2) al (sub_region_addr sr + wrepr _ i)%R ws =
-    if is_aligned_if al (sub_region_addr sr + wrepr _ i)%R ws then ok w else Error ErrAddrInvalid.
+   words of arbitrary sizes, when status is Valid. *)
+Lemma eq_sub_region_val_read_word se sr ty s2 (v : value) ofs ws off w al :
+  wf_sub_region se sr ty ->
+  eq_sub_region_val_read se (emem s2) sr Valid v ->
+  sub_region_addr se sr = ok ofs ->
+  (forall k, 0 <= k < wsize_size ws -> get_val_byte v (off + k) = ok (LE.wread8 w k)) ->
+  read (emem s2) al (ofs + wrepr _ off)%R ws =
+    if is_aligned_if al (ofs + wrepr _ off)%R ws then ok w else Error ErrAddrInvalid.
 Proof.
-  move=> hwf hread hmem hofs hbound hget.
+  move=> hwf hread ok_ofs hget.
   apply read8_read.
   move=> al' k hk.
   rewrite addE -GRing.addrA -wrepr_add (read8_alignment Aligned).
-  apply hread; last by apply hget.
-  rewrite memi_mem_U8; apply: mem_incl_r hmem; rewrite subset_interval_of_zone.
-  rewrite -(sub_zone_at_ofs_compose _ _ _ (wsize_size ws)).
-  apply: zbetween_zone_byte => //.
-  by apply (zbetween_zone_sub_zone_at_ofs_option hwf).
+  apply hread => //.
+  by apply hget.
 Qed.
 
 Lemma get_val_byte_word ws (w : word ws) off :
@@ -850,13 +882,13 @@ Qed.
 
 Lemma check_gvalid_lvar rmap (x : var_i) sr :
   Mvar.get rmap.(var_region) x = Some sr ->
-  check_gvalid rmap (mk_lvar x) = Some (sr, get_var_bytes rmap sr.(sr_region) x).
+  check_gvalid rmap (mk_lvar x) = Some (sr, get_var_status rmap sr.(sr_region) x).
 Proof. by rewrite /check_gvalid /= => ->. Qed.
 
-Lemma check_gvalid_writable rmap x sr bytes :
+Lemma check_gvalid_writable rmap x sr status :
   sr.(sr_region).(r_writable) ->
-  check_gvalid rmap x = Some (sr, bytes) ->
-  bytes = get_var_bytes rmap sr.(sr_region) x.(gv).
+  check_gvalid rmap x = Some (sr, status) ->
+  status = get_var_status rmap sr.(sr_region) x.(gv).
 Proof.
   move=> hw.
   rewrite /check_gvalid.
@@ -886,15 +918,18 @@ Proof.
   by rewrite truncate_word_u /= wrepr_add wrepr_mul GRing.mulrC.
 Qed.
 
-Lemma mk_ofsiP wdb gd s e i aa sz :
+Lemma mk_ofs_intP wdb gd s e i aa sz :
   Let x := sem_pexpr wdb gd s e in to_int x = ok i ->
-  mk_ofsi aa sz e <> None ->
-  mk_ofsi aa sz e = Some (i * mk_scale aa sz).
-Proof. by case: e => //= _ [->]. Qed.
+  sem_pexpr wdb gd s (mk_ofs_int aa sz e) = ok (Vint (i * mk_scale aa sz)).
+Proof.
+  rewrite /mk_ofs_int; case is_constP => /= [? [->] //| {e} e he] /=.
+  move: he; t_xrbindP => v ok_v ok_i.
+  by rewrite ok_v /= /sem_sop2 /= ok_i /= Z.mul_comm.
+Qed.
 
 Section EXPR.
-  Variables (rmap:region_map) (m0:mem) (s:estate) (s':estate).
-  Hypothesis (hvalid: valid_state rmap m0 s s').
+  Variables (se : estate) (rmap:region_map) (m0:mem) (s:estate) (s':estate).
+  Hypothesis (hvalid: valid_state se rmap m0 s s').
 
   (* If [x] is a register, it is not impacted by the presence of global
      variables per hypothesis [vs_eq_vm].
@@ -919,20 +954,92 @@ Section EXPR.
     by rewrite Z.ones_equiv.
   Qed.
 
-  Lemma check_alignP al x sr ty ws tt :
-    wf_sub_region sr ty ->
-    check_align al x sr ws = ok tt ->
-    is_aligned_if al (sub_region_addr sr) ws.
+  Lemma divideP ws e wdb gd i :
+    divide e ws ->
+    sem_pexpr wdb gd se e >>= to_int = ok i ->
+    i mod wsize_size ws = 0.
   Proof.
-    move=> hwf; rewrite /check_align; t_xrbindP.
-    case: al => //; rewrite orFb => halign /eqP halign2.
+    case: e => //=.
+    + move=> z. rewrite /divide_z Zland_mod => ? -[<-]. apply/eqP. done.
+    case=> // o e1 e2.
+    move=> /orP [].
+    + case: is_constP => // z1.
+      rewrite /divide_z Zland_mod => h /=.
+      t_xrbindP.
+      move=> v v2 ok_v2 /=.
+      case: o.
+      + rewrite /sem_sop2 /=. t_xrbindP.
+        move=> z2 ok_z2 <- /= [<-].
+        rewrite Zmult_mod. move: h => /eqP ->. rewrite Z.mul_0_l. rewrite Zmod_0_l.
+        done.
+      rewrite /sem_sop2 /=. done.
+    case: is_constP => // z2.
+    rewrite /divide_z Zland_mod => h /=.
+    t_xrbindP.
+    move=> v v1 ok_v1 /=.
+    case: o.
+    + rewrite /sem_sop2 /=. t_xrbindP.
+      move=> z1 ok_z1 <- /= [<-].
+      rewrite Zmult_mod. move: h => /eqP ->. rewrite Z.mul_0_r. rewrite Zmod_0_l.
+      done.
+    rewrite /sem_sop2 /=. t_xrbindP; done.
+  Qed.
+
+  Lemma divide_slice sli ws cs :
+    divide_zone [:: sli] ws ->
+    sem_slice se sli = ok cs ->
+    cs.(cs_ofs) mod wsize_size ws = 0.
+  Proof.
+    rewrite /= andbT => hdiv.
+    rewrite /sem_slice.
+    apply: rbindP => ofs ok_ofs.
+    apply: rbindP => len _ [<-] /=.
+    have := divideP hdiv ok_ofs. done.
+  Qed.
+
+(* try other sem_slice formulation to check which one is easier to reason with *)
+  Lemma divide_zoneP z ws cs :
+    divide_zone z ws ->
+    sem_zone se z = ok cs ->
+    cs.(cs_ofs) mod wsize_size ws = 0.
+  Proof.
+    elim: z cs => //= sli z ih cs /andP [hdiv1 hdiv2].
+    case: z ih hdiv2.
+    + move=> _ _. rewrite /sem_slice.
+      apply: rbindP => ofs ok_ofs.
+      apply: rbindP => len _ [<-] /=.
+      have := divideP hdiv1 ok_ofs. done.
+    move=> sli' z ih hdiv2.
+    t_xrbindP. move=> cs1 ok_cs1 cs2 ok_cs2.
+    case: ifP => // _.
+    move=> [<-] /=.
+    rewrite Zplus_mod.
+    have := divide_slice (sli:=sli) (ws:=ws) _ ok_cs1.
+    rewrite /= andbT => /(_ hdiv1) ->.
+    have -> := ih _ hdiv2 ok_cs2.
+    rewrite /= Zmod_0_l. done.
+  Qed.
+
+  Lemma check_alignP x sr ty w al ws tt :
+    wf_sub_region se sr ty ->
+    sub_region_addr se sr = ok w ->
+    check_align al x sr ws = ok tt ->
+    is_aligned_if al w ws.
+  Proof.
+    move=> hwf ok_w; rewrite /check_align; t_xrbindP.
+    case: al => //= halign halign2.
     have: is_align (Addr sr.(sr_region).(r_slot)) ws.
     + apply (is_align_m halign).
       rewrite -hwf.(wfr_align).
       by apply (slot_align hwf.(wfr_slot)).
-    rewrite /is_aligned_if /is_align !p_to_zE (wunsigned_sub_region_addr hwf) Z.add_mod //.
+    rewrite /is_align !p_to_zE.
+    have [cs ok_cs _] := hwf.(wfsr_zone).
+    have := wunsigned_sub_region_addr hwf ok_cs.
+    rewrite ok_w.
+    move=> [_ [<-] ->]. rewrite Z.add_mod //.
     move=> /eqP -> /=.
-    by rewrite -(Zland_mod (z_ofs _)) halign2.
+    have -> := divide_zoneP halign2 ok_cs.
+    rewrite Zmod_0_l. done.
   Qed.
 
   Lemma get_sub_regionP x sr :
@@ -942,68 +1049,65 @@ Section EXPR.
     by move=> ?; split => -[->].
   Qed.
 
-  Lemma get_sub_region_bytesP (x : var_i) ofs len sr sr' bytes :
-    get_sub_region_bytes rmap x ofs len = ok (sr, sr', bytes) ->
-    exists bytesx, [/\
-      check_gvalid rmap (mk_lvar x) = Some (sr, bytesx),
-      sr' = sub_region_at_ofs sr ofs len &
-      let isub_ofs := interval_of_zone sr'.(sr_zone) in
-      bytes = ByteSet.inter bytesx (ByteSet.full isub_ofs)].
+  Lemma get_sub_region_statusP (x : var_i) sr status :
+    get_sub_region_status rmap x = ok (sr, status) ->
+    check_gvalid rmap (mk_lvar x) = Some (sr, status).
   Proof.
-    rewrite /get_sub_region_bytes /check_gvalid.
-    t_xrbindP=> _ /get_sub_regionP -> -> <- <- /=.
-    by eexists.
+    rewrite /get_sub_region_status /check_gvalid /=.
+    by t_xrbindP=> _ /get_sub_regionP -> -> ->.
   Qed.
 
-  Lemma check_validP (x : var_i) sr bytes tt :
-    check_valid x sr bytes = ok tt ->
-    ByteSet.mem bytes (interval_of_zone sr.(sr_zone)).
-  Proof. by rewrite /check_valid; t_xrbindP. Qed.
+  Lemma is_validP status :
+    is_valid status -> status = Valid.
+  Proof. by case: status. Qed.
+
+  Lemma check_validP (x : var_i) status tt :
+    check_valid x status = ok tt ->
+    status = Valid.
+  Proof. by rewrite /check_valid; t_xrbindP=> /is_validP. Qed.
 
   Lemma sub_region_addr_glob x ofs ws :
     wf_global x ofs ws ->
-    sub_region_addr (sub_region_glob x ws) = (rip + wrepr _ ofs)%R.
+    sub_region_addr se (sub_region_glob x ws) = ok (rip + wrepr _ ofs)%R.
   Proof.
     by move=> hwf; rewrite /sub_region_addr /= hwf.(wfg_offset) wrepr0 GRing.addr0.
   Qed.
 
-  Lemma sub_region_addr_direct x sl ofs ws z sc :
-    wf_direct x sl ofs ws z sc ->
-    sub_region_addr (sub_region_direct sl ws sc z) = (wbase_ptr sc + wrepr _ (ofs + z.(z_ofs)))%R.
+  Lemma sub_region_addr_direct x sl ofs ws cs sc :
+    wf_direct x sl ofs ws cs sc ->
+    sub_region_addr se (sub_region_direct sl ws cs sc) =
+      ok (wbase_ptr sc + wrepr _ (ofs + cs.(cs_ofs)))%R.
   Proof.
     by move=> hwf; rewrite /sub_region_addr hwf.(wfd_offset) wrepr_add GRing.addrA.
   Qed.
 
-  Lemma sub_region_addr_stkptr x sl ofs ws z f :
-    wf_stkptr x sl ofs ws z f ->
-    sub_region_addr (sub_region_stkptr sl ws z) = (rsp + wrepr _ (ofs + z.(z_ofs)))%R.
+  Lemma sub_region_addr_stkptr x sl ofs ws cs f :
+    wf_stkptr x sl ofs ws cs f ->
+    sub_region_addr se (sub_region_stkptr sl ws cs) =
+      ok (rsp + wrepr _ (ofs + cs.(cs_ofs)))%R.
   Proof.
     by move=> hwf; rewrite /sub_region_addr /= hwf.(wfs_offset) wrepr_add GRing.addrA.
   Qed.
 
-  Lemma sub_region_stkptr_wf y sl ofs ws z f :
-    wf_stkptr y sl ofs ws z f ->
-    wf_sub_region (sub_region_stkptr sl ws z) spointer.
-  Proof. by case. Qed.
-
-  Lemma check_vpkP x vpk ofs len sr sr' bytes :
-    (forall zofs, ofs = Some zofs -> 0 <= zofs /\ zofs + len <= size_slot x.(gv)) ->
-    get_var_kind pmap x = ok (Some vpk) ->
-    check_vpk rmap x.(gv) vpk ofs len = ok (sr, sr', bytes) ->
-    exists bytesx,
-      [/\ check_gvalid rmap x = Some (sr, bytesx),
-      sr' = sub_region_at_ofs sr ofs len &
-      let isub_ofs := interval_of_zone sr'.(sr_zone) in
-      bytes = ByteSet.inter bytesx (ByteSet.full isub_ofs)].
+  Lemma sub_region_stkptr_wf y sl ofs ws cs f :
+    wf_stkptr y sl ofs ws cs f ->
+    wf_sub_region se (sub_region_stkptr sl ws cs) spointer.
   Proof.
-    move=> hofs; rewrite /get_var_kind /check_gvalid.
-    case : (@idP (is_glob x)) => hg.
-    + t_xrbindP=> -[_ ws'] /get_globalP /[dup] /wf_globals /sub_region_glob_wf hwf -> <- /= [<- <- <-].
-      set bytesx := ByteSet.full _.
-      by exists bytesx.
-    by case hlocal: get_local => [pk|//] [<-] /get_sub_region_bytesP.
+    case=> *; split=> //.
+    by eexists; first by reflexivity.
   Qed.
 
+  Lemma get_gsub_region_statusP x vpk sr status :
+    get_var_kind pmap x = ok (Some vpk) ->
+    get_gsub_region_status rmap x.(gv) vpk = ok (sr, status) ->
+    check_gvalid rmap x = Some (sr, status).
+  Proof.
+    rewrite /get_var_kind /check_gvalid.
+    case : (@idP (is_glob x)) => hg.
+    + by t_xrbindP=> -[_ ws'] /get_globalP -> <- /= [<- <-].
+    by case hlocal: get_local => [pk|//] [<-] /get_sub_region_statusP.
+  Qed.
+(*
   Lemma check_vpk_wordP al x vpk ofs ws t :
     (forall zofs, ofs = Some zofs -> 0 <= zofs /\ zofs + wsize_size ws <= size_slot x.(gv)) ->
     get_var_kind pmap x = ok (Some vpk) ->
@@ -1023,26 +1127,29 @@ Section EXPR.
     apply: mem_incl_l hmem.
     by apply subset_inter_l.
   Qed.
-
-  Lemma addr_from_pkP wdb (x:var_i) pk sr xi ofs :
+*)
+  Lemma addr_from_pkP wdb (x:var_i) pk sr ty xi ofs :
     wf_local x pk ->
-    valid_pk rmap s' sr pk ->
+    valid_pk se rmap s' sr pk ->
+    wf_sub_region se sr ty ->
     addr_from_pk pmap x pk = ok (xi, ofs) ->
-    exists w,
-      get_var wdb (evm s') xi >>= to_pointer = ok w /\
-      sub_region_addr sr = (w + wrepr _ ofs)%R.
+    exists2 w,
+      get_var wdb (evm s') xi >>= to_pointer = ok w &
+      sub_region_addr se sr = ok (w + wrepr _ ofs)%R.
   Proof.
     case: pk => //.
-    + move=> sl ofs' ws z sc hwfpk /= -> [<- <-].
-      rewrite /= /get_gvar /get_var /= base_ptrP /= orbT /= truncate_word_u.
-      eexists; split; first by reflexivity.
-      by rewrite (sub_region_addr_direct hwfpk).
-    move=> p hwfpk /= hpk [<- <-].
-    rewrite /= /get_gvar /get_var /= hpk /= orbT /= truncate_word_u.
-    eexists; split; first by reflexivity.
+    + move=> sl ofs' ws cs sc hwfpk /= -> _ [<- <-].
+      rewrite /= /get_var base_ptrP /= orbT /= truncate_word_u.
+      eexists; first by reflexivity.
+      by apply (sub_region_addr_direct hwfpk).
+    move=> p hwfpk /= hpk hwf [<- <-].
+    have [cs ok_cs _] := hwf.(wfsr_zone).
+    have [w ok_w _] := wunsigned_sub_region_addr hwf ok_cs.
+    rewrite /= /get_var (hpk _ ok_w) /= orbT /= truncate_word_u.
+    eexists; first by reflexivity.
     by rewrite wrepr0 GRing.addr0.
   Qed.
-
+(*
   (* If [x] is a local variable *)
   Lemma check_mk_addr_ptr (x:var_i) aa ws xi ei e1 i1 pk sr :
     sem_pexpr true [::] s' e1 >>= to_int = ok i1 ->
@@ -1062,23 +1169,24 @@ Section EXPR.
     eexists _, _; split=> //.
     by rewrite Z.add_comm wrepr_add GRing.addrA.
   Qed.
-
-  Lemma addr_from_vpkP wdb (x:var_i) vpk sr xi ofs :
+*)
+  Lemma addr_from_vpkP wdb (x:var_i) vpk sr ty xi ofs :
     wf_vpk x vpk ->
-    valid_vpk rmap s' x sr vpk ->
+    valid_vpk se rmap s' x sr vpk ->
+    wf_sub_region se sr ty ->
     addr_from_vpk pmap x vpk = ok (xi, ofs) ->
-    exists w,
-      get_var wdb (evm s') xi >>= to_pointer = ok w /\
-      sub_region_addr sr = (w + wrepr _ ofs)%R.
+    exists2 w,
+      get_var wdb (evm s') xi >>= to_pointer = ok w &
+      sub_region_addr se sr = ok (w + wrepr _ ofs)%R.
   Proof.
     case: vpk => [[ofs' ws]|pk].
-    + move=> hwfpk /= -> [<- <-].
-      rewrite /= /get_gvar /get_var /= vs_rip /= orbT /= truncate_word_u.
-      eexists; split; first by reflexivity.
+    + move=> hwfpk /= -> hwf [<- <-].
+      rewrite /= /get_var vs_rip /= orbT /= truncate_word_u.
+      eexists; first by reflexivity.
       by rewrite (sub_region_addr_glob hwfpk).
     by apply addr_from_pkP.
   Qed.
-
+(*
   Lemma check_mk_addr (x:var_i) aa ws xi ei e1 i1 vpk sr :
     sem_pexpr true [::] s' e1 >>= to_int = ok i1 ->
     wf_vpk x vpk ->
@@ -1126,7 +1234,7 @@ Section EXPR.
     rewrite (sub_region_addr_offset (wsize_size ws)).
     by apply (validw_sub_region_addr hwf').
   Qed.
-
+*)
   Let X e : Prop :=
     ∀ ty e' v v2,
       alloc_e pmap rmap e ty = ok e' →
@@ -1245,7 +1353,22 @@ Section EXPR.
         by apply: get_var_kindP.
       case hty: is_word_type => [ws | //]; move /is_word_typeP in hty; subst.
       case: ifP => //; rewrite -/(subtype (sword _) _) => hsub.
-      t_xrbindP => hcheck [xi ei] haddr <- hget /= htr.
+      t_xrbindP=> -[sr status] hgsub.
+      t_xrbindP=> hcvalid [xi ofsi] haddr [<-] hget /= htr.
+      have hgvalid := get_gsub_region_statusP hgvk hgsub.
+      have hwf := [elaborate check_gvalid_wf wfr_wf hgvalid].
+      have hvpk: valid_vpk se rmap s' x.(gv) sr vpk.
+      + have /wfr_gptr := hgvalid.
+        by rewrite hgvk => -[_ [[]] <-].
+      have [wi ok_wi eq_addr] :=
+        addr_from_vpkP true (get_var_kind_wf hgvk) hvpk hwf haddr.
+      rewrite ok_wi /= truncate_word_u /=.
+      assert (heq := wfr_val hgvalid hget).
+      case: heq => hread hty'.
+      have ? := check_validP hcvalid; subst status.
+      rewrite -(GRing.addr0 (_+_)%R) -wrepr0.
+      rewrite (eq_sub_region_val_read_word _ hwf hread eq_addr (w:=zero_extend ws wi)).
+      
       have h0: Let x := sem_pexpr true [::] s' 0 in to_int x = ok 0 by done.
       have h1: 0 <= 0 /\ wsize_size ws <= size_slot x.(gv).
       + by have /= := size_of_le hsub; lia.

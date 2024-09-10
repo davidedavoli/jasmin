@@ -370,16 +370,34 @@ Record param_info := {
 (* ------------------------------------------------------------------ *)
 (* Operations on rmap *)
 
+Definition divide_z z ws :=
+  (Z.land z (wsize_size ws - 1) == 0)%Z.
+
+Definition divide e ws :=
+  match e with
+  | Pconst z => divide_z z ws
+  | Papp2 (Omul _) e1 e2 =>
+    (if is_const e1 is Some z1 then divide_z z1 ws else false) ||
+    (if is_const e2 is Some z2 then divide_z z2 ws else false)
+  | _ => false
+  end.
+
+Fixpoint divide_zone z ws :=
+  match z with
+  | [::] => true
+  | s :: z =>
+    divide s.(ss_ofs) ws && divide_zone z ws
+  end.
+
 (* TODO: Z.land or is_align ?
    Could be just is_align (sub_region_addr sr) ws ? *)
 Definition check_align al x (sr:sub_region) ws :=
-  Let _ := assert ((al == Unaligned) || (ws <= sr.(sr_region).(r_align))%CMP) (* TODO: is this check needed? *)
+  Let _ := assert ((al == Unaligned) || (ws <= sr.(sr_region).(r_align))%CMP)
                   (stk_ierror_basic x "unaligned offset") in
   (* FIXME SYMBOLIC: how to check the alignment ? *)
   (* idea: use align/misaligned instructions, only use aligned ones when we are statically sure that it's ok *)
-(*   assert ((al == Unaligned) || (Z.land sr.(sr_zone).(z_ofs) (wsize_size ws - 1) == 0)%Z)
-         (stk_ierror_basic x "unaligned sub offset"). *)
-  ok tt.
+  assert ((al == Unaligned) || divide_zone sr.(sr_zone) ws)
+         (stk_ierror_basic x "unaligned sub offset").
 
 Definition check_writable (x:var_i) (r:region) :=
   assert r.(r_writable)
@@ -780,19 +798,12 @@ Definition add := Papp2 (Oadd (Op_w Uptr)).
 (* TODO: do we need to do the check here? I think we can always return the
    "else" version, and in a later pass, it will be recognized as a constant? *)
 (* It seems indeed that it is an optim, mk_lea recognize that it is a constant. *)
-Definition mk_ofs aa ws e1 :=
+Definition mk_ofs aa ws e1 ofs :=
   let sz := mk_scale aa ws in
   if is_const e1 is Some i then
-    cast_const (i * sz)%Z
+    cast_const (i * sz + ofs)%Z
   else
-    mul (cast_const sz) (cast_ptr e1).
-
-(* Do we want the optim for constants? *)
-Definition add_ofs ofs1 ofs2 :=
-  match is_wconst_of_size Uptr ofs1 with
-  | Some ofs1 => cast_const (ofs1 + ofs2)
-  | None => add ofs1 (cast_const ofs2)
-  end.
+    add (mul (cast_const sz) (cast_ptr e1)) (cast_const ofs).
 
 (* For the symbolic analysis *)
 Definition mk_ofs_int aa ws e1 :=
@@ -915,7 +926,7 @@ Fixpoint alloc_e (e:pexpr) ty :=
       Let: (_, status) := get_gsub_region_status rmap xv vpk in
       Let _ := check_valid xv status in
       Let: (p, ofs) := addr_from_vpk xv vpk in
-      let ofs := add_ofs (mk_ofs aa ws e1) ofs in
+      let ofs := mk_ofs aa ws e1 ofs in
       ok (Pload al ws p ofs)
     end
 
@@ -994,7 +1005,7 @@ Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
       Let: (sr, status) := get_sub_region_status rmap x in
       Let rmap := set_word rmap al sr x status ws in
       Let: (p, ofs) := addr_from_pk x pk in
-      let ofs := add_ofs (mk_ofs aa ws e1) ofs in
+      let ofs := mk_ofs aa ws e1 ofs in
       let r := Lmem al ws p ofs in
       ok (rmap, r)
     end
@@ -1083,7 +1094,7 @@ Definition alloc_array_move table rmap r tag e :=
         let len := Pconst (arr_size ws len) in
         let (sr, status) := sub_region_status_at_ofs yv sr status ofs len in
         Let eofs := mk_addr_pexpr rmap yv vpk in
-        ok (table, sr, status, mk_mov vpk, eofs.1, add_ofs (mk_ofs aa ws e1) eofs.2)
+        ok (table, sr, status, mk_mov vpk, eofs.1, mk_ofs aa ws e1 eofs.2)
       end
     | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (y)")
     end
