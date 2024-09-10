@@ -908,8 +908,9 @@ Fixpoint alloc_e (e:pexpr) ty :=
     | Some vpk =>
       if is_word_type ty is Some ws then
         if subtype (sword ws) (vtype xv) then
-          Let: (_, status) := get_gsub_region_status rmap xv vpk in
+          Let: (sr, status) := get_gsub_region_status rmap xv vpk in
           Let _ := check_valid xv status in
+          Let _ := check_align Aligned xv sr ws in
           Let: (p, ofs) := addr_from_vpk xv vpk in
           ok (Pload Aligned ws p (cast_const ofs))
         else Error (stk_ierror_basic xv "invalid type for expression")
@@ -923,8 +924,9 @@ Fixpoint alloc_e (e:pexpr) ty :=
     match vk with
     | None => Let _ := check_diff xv in ok (Pget al aa ws x e1)
     | Some vpk =>
-      Let: (_, status) := get_gsub_region_status rmap xv vpk in
+      Let: (sr, status) := get_gsub_region_status rmap xv vpk in
       Let _ := check_valid xv status in
+      Let _ := check_align al xv sr ws in
       Let: (p, ofs) := addr_from_vpk xv vpk in
       let ofs := mk_ofs aa ws e1 ofs in
       ok (Pload al ws p ofs)

@@ -654,6 +654,7 @@ Proof.
   exists cs => //; split=> //.
   by move /size_of_le : hsub; lia.
 Qed.
+
 (*
 Lemma sem_zone_rcons se z s cs :
   z <> [::] ->
@@ -960,64 +961,52 @@ Section EXPR.
     i mod wsize_size ws = 0.
   Proof.
     case: e => //=.
-    + move=> z. rewrite /divide_z Zland_mod => ? -[<-]. apply/eqP. done.
+    + move=> z.
+      by rewrite /divide_z Zland_mod => /eqP hdiv -[<-].
     case=> // o e1 e2.
     move=> /orP [].
-    + case: is_constP => // z1.
-      rewrite /divide_z Zland_mod => h /=.
-      t_xrbindP.
-      move=> v v2 ok_v2 /=.
-      case: o.
-      + rewrite /sem_sop2 /=. t_xrbindP.
-        move=> z2 ok_z2 <- /= [<-].
-        rewrite Zmult_mod. move: h => /eqP ->. rewrite Z.mul_0_l. rewrite Zmod_0_l.
-        done.
-      rewrite /sem_sop2 /=. done.
-    case: is_constP => // z2.
-    rewrite /divide_z Zland_mod => h /=.
-    t_xrbindP.
-    move=> v v1 ok_v1 /=.
-    case: o.
-    + rewrite /sem_sop2 /=. t_xrbindP.
-      move=> z1 ok_z1 <- /= [<-].
-      rewrite Zmult_mod. move: h => /eqP ->. rewrite Z.mul_0_r. rewrite Zmod_0_l.
-      done.
-    rewrite /sem_sop2 /=. t_xrbindP; done.
+    + case: is_constP => //= z1.
+      rewrite /divide_z Zland_mod => /eqP hdiv.
+      t_xrbindP=> v v2 ok_v2.
+      case: o => //=.
+      rewrite /sem_sop2 /=.
+      t_xrbindP=> z2 ok_z2 <- /= [<-].
+      by rewrite Zmult_mod hdiv /= Zmod_0_l.
+    case: is_constP => //= z2.
+    rewrite /divide_z Zland_mod => /eqP hdiv.
+    t_xrbindP=> v v1 ok_v1.
+    case: o; last by rewrite /sem_sop2 /=; t_xrbindP.
+    rewrite /sem_sop2 /=.
+    t_xrbindP=> z1 ok_z1 <- /= [<-].
+    by rewrite Zmult_mod hdiv Z.mul_0_r Zmod_0_l.
   Qed.
 
-  Lemma divide_slice sli ws cs :
-    divide_zone [:: sli] ws ->
+  Lemma divideP_slice sli ws cs :
+    divide (ss_ofs sli) ws ->
     sem_slice se sli = ok cs ->
     cs.(cs_ofs) mod wsize_size ws = 0.
   Proof.
-    rewrite /= andbT => hdiv.
+    move=> hdiv.
     rewrite /sem_slice.
     apply: rbindP => ofs ok_ofs.
     apply: rbindP => len _ [<-] /=.
-    have := divideP hdiv ok_ofs. done.
+    by apply (divideP hdiv ok_ofs).
   Qed.
 
-(* try other sem_slice formulation to check which one is easier to reason with *)
+  (* TODO: try other sem_zone formulation to check which one is easier to reason with *)
   Lemma divide_zoneP z ws cs :
     divide_zone z ws ->
     sem_zone se z = ok cs ->
     cs.(cs_ofs) mod wsize_size ws = 0.
   Proof.
-    elim: z cs => //= sli z ih cs /andP [hdiv1 hdiv2].
+    elim: z cs => //= sli1 z ih cs /andP [hdiv1 hdiv2].
     case: z ih hdiv2.
-    + move=> _ _. rewrite /sem_slice.
-      apply: rbindP => ofs ok_ofs.
-      apply: rbindP => len _ [<-] /=.
-      have := divideP hdiv1 ok_ofs. done.
-    move=> sli' z ih hdiv2.
-    t_xrbindP. move=> cs1 ok_cs1 cs2 ok_cs2.
-    case: ifP => // _.
-    move=> [<-] /=.
+    + by move=> _ _; apply divideP_slice.
+    move=> sli2 z ih hdiv2.
+    t_xrbindP=> cs1 /(divideP_slice hdiv1) {}hdiv1 cs2 /(ih _ hdiv2) {}hdiv2.
+    case: ifP => // _ [<-] /=.
     rewrite Zplus_mod.
-    have := divide_slice (sli:=sli) (ws:=ws) _ ok_cs1.
-    rewrite /= andbT => /(_ hdiv1) ->.
-    have -> := ih _ hdiv2 ok_cs2.
-    rewrite /= Zmod_0_l. done.
+    by rewrite hdiv1 hdiv2.
   Qed.
 
   Lemma check_alignP x sr ty w al ws tt :
@@ -1035,11 +1024,10 @@ Section EXPR.
     rewrite /is_align !p_to_zE.
     have [cs ok_cs _] := hwf.(wfsr_zone).
     have := wunsigned_sub_region_addr hwf ok_cs.
-    rewrite ok_w.
-    move=> [_ [<-] ->]. rewrite Z.add_mod //.
+    rewrite ok_w => -[_ [<-] ->].
+    rewrite Z.add_mod //.
     move=> /eqP -> /=.
-    have -> := divide_zoneP halign2 ok_cs.
-    rewrite Zmod_0_l. done.
+    by rewrite (divide_zoneP halign2 ok_cs).
   Qed.
 
   Lemma get_sub_regionP x sr :
@@ -1354,7 +1342,7 @@ Section EXPR.
       case hty: is_word_type => [ws | //]; move /is_word_typeP in hty; subst.
       case: ifP => //; rewrite -/(subtype (sword _) _) => hsub.
       t_xrbindP=> -[sr status] hgsub.
-      t_xrbindP=> hcvalid [xi ofsi] haddr [<-] hget /= htr.
+      t_xrbindP=> hcvalid halign [xi ofsi] haddr [<-] hget /= htr.
       have hgvalid := get_gsub_region_statusP hgvk hgsub.
       have hwf := [elaborate check_gvalid_wf wfr_wf hgvalid].
       have hvpk: valid_vpk se rmap s' x.(gv) sr vpk.
@@ -1363,36 +1351,20 @@ Section EXPR.
       have [wi ok_wi eq_addr] :=
         addr_from_vpkP true (get_var_kind_wf hgvk) hvpk hwf haddr.
       rewrite ok_wi /= truncate_word_u /=.
-      assert (heq := wfr_val hgvalid hget).
-      case: heq => hread hty'.
-      have ? := check_validP hcvalid; subst status.
-      rewrite -(GRing.addr0 (_+_)%R) -wrepr0.
-      rewrite (eq_sub_region_val_read_word _ hwf hread eq_addr (w:=zero_extend ws wi)).
-      
-      have h0: Let x := sem_pexpr true [::] s' 0 in to_int x = ok 0 by done.
-      have h1: 0 <= 0 /\ wsize_size ws <= size_slot x.(gv).
-      + by have /= := size_of_le hsub; lia.
-      have h1' := ofs_bound_option h1 (fun _ => refl_equal).
-      have [sr [bytes [hgvalid hmem halign]]] := check_vpk_wordP h1' hgvk hcheck.
-      have h2: valid_vpk rmap s' x.(gv) sr vpk.
-      + have /wfr_gptr := hgvalid.
-        by rewrite hgvk => -[_ [[]] <-].
-      have [wx [wi [-> -> /= haddr2]]] := check_mk_addr h0 (get_var_kind_wf hgvk) h2 haddr.
-      rewrite -haddr2.
       have [ws' [htyx hcmp]] := subtypeEl hsub.
       assert (heq := wfr_val hgvalid hget); rewrite htyx in heq.
       case: heq => hread hty'.
       have [ws'' [w [_ ?]]] := get_gvar_word htyx hget; subst v.
       case: hty' => ?; subst ws''.
-      assert (hwf := check_gvalid_wf wfr_wf hgvalid).
-      have hwf' := wf_sub_region_subtype hsub hwf.
-      rewrite (eq_sub_region_val_read_word _ hwf' hread hmem (w:=zero_extend ws w)) //.
-      + rewrite wrepr0 GRing.addr0 halign /=.
+      have ? := check_validP hcvalid; subst status.
+      rewrite -(GRing.addr0 (_+_)%R) -wrepr0.
+      rewrite (eq_sub_region_val_read_word _ hwf hread eq_addr (w:=zero_extend ws w)).
+      + rewrite wrepr0 GRing.addr0.
+        rewrite (check_alignP hwf eq_addr halign) /=.
         eexists; split; first by reflexivity.
         move: htr; rewrite /truncate_val /=.
         t_xrbindP=> ? /truncate_wordP [_ ->] <-.
         by rewrite truncate_word_u.
-      + by move=> /=; lia.
       move=> k hk.
       rewrite zero_extend_wread8 //.
       apply (get_val_byte_word w).
@@ -1408,25 +1380,27 @@ Section EXPR.
       move=> [vpk | ]; last first.
       + t_xrbindP => h /check_diffP h1 <- /=.
         by rewrite (get_var_kindP h h1 hget) /= h0 /= hw.
-      t_xrbindP => hgvk hcheck [xi ei] haddr <- /=.
-      have [h1 h2 h3] := WArray.get_bound hw.
-      have h4: 0 <= i * mk_scale aa sz /\ i * mk_scale aa sz + wsize_size sz <= size_slot x.(gv).
-      + by rewrite htyx.
-      have h4' := ofs_bound_option h4 (mk_ofsiP h0).
-      have [sr [bytes [hgvalid hmem halign]]] := check_vpk_wordP h4' hgvk hcheck.
-      have h5: valid_vpk rmap s' x.(gv) sr vpk.
+      t_xrbindP=> hgvk [sr status] hgsub.
+      t_xrbindP=> hcvalid halign [xi ofsi] haddr [<-] /=.
+      have hgvalid := get_gsub_region_statusP hgvk hgsub.
+      have hwf := [elaborate check_gvalid_wf wfr_wf hgvalid].
+      have hvpk: valid_vpk se rmap s' x.(gv) sr vpk.
       + have /wfr_gptr := hgvalid.
         by rewrite hgvk => -[_ [[]] <-].
-      have [wx [wi [-> -> /= haddr2]]] := check_mk_addr h0 (get_var_kind_wf hgvk) h5 haddr.
-      rewrite -haddr2.
+      have [wi ok_wi eq_addr] :=
+        addr_from_vpkP true (get_var_kind_wf hgvk) hvpk hwf haddr.
+      rewrite ok_wi /= (mk_ofsP aa sz ofsi h0) /= truncate_word_u /=.
       assert (heq := wfr_val hgvalid hget).
       case: heq => hread _.
-      assert (hwf := check_gvalid_wf wfr_wf hgvalid).
-      have [_ h6] := (read_read8 hw).
-      rewrite (eq_sub_region_val_read_word _ hwf hread hmem (mk_ofsiP h0) (w:=w)) // /=.
-      + case: al hw h3 h6 {hcheck} halign => //= hw h3 h6 halign.
-        by rewrite (is_align_addE halign) WArray.arr_is_align h3.
-      by move => k hk; rewrite (read8_alignment al) -h6.
+      have ? := check_validP hcvalid; subst status.
+      rewrite wrepr_add (GRing.addrC (wrepr _ _)) GRing.addrA.
+      rewrite (eq_sub_region_val_read_word _ hwf hread eq_addr (w:=w)).
+      + case: al hw halign => //= hw halign.
+        have {}halign := check_alignP hwf eq_addr halign.
+        rewrite (is_align_addE halign) WArray.arr_is_align.
+        by have [_ _ /= ->] := WArray.get_bound hw.
+      have [_ hread8] := (read_read8 hw).
+      by move => k hk; rewrite /= (read8_alignment al) -hread8.
     + move=> al1 sz1 v1 e1 IH ty e2 v v2.
       t_xrbindP => /check_varP hc /check_diffP hnnew e1' /IH hrec <- wv1 vv1 /= hget hto' we1 ve1.
       move=> he1 hto wr hr ? htr; subst v.
