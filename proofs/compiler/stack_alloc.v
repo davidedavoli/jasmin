@@ -555,12 +555,12 @@ Definition set_clear rmap x sr :=
   Let _ := check_writable x sr.(sr_region) in
   ok (set_clear_pure rmap sr).
 
+Definition is_unknown status :=
+  if status is Unknown then true else false.
+
 (* We don't put Unknown in the map, we just remove it from the map. *)
 Definition set_status sm x status :=
-  match status with
-  | Unknown => Mvar.remove sm x
-  | _ => Mvar.set sm x status
-  end.
+  if is_unknown status then Mvar.remove sm x else Mvar.set sm x status.
 
 (* word : clear + move *)
 Definition set_word_status (rmap:region_map) sr x status :=
@@ -990,7 +990,8 @@ Definition alloc_lval (rmap: region_map) (r:lval) (ty:stype) :=
     | Some pk =>
       if is_word_type (vtype x) is Some ws then
         if subtype (sword ws) ty then
-          Let sr   := sub_region_pk x pk in
+(*           Let sr   := sub_region_pk x pk in *)
+          Let sr := get_sub_region rmap x in
           Let rmap := set_word rmap Aligned sr x Valid ws in
           Let: (p, ofs) := addr_from_pk x pk in
           let r := Lmem Aligned ws p (cast_const ofs) in
