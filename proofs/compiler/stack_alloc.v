@@ -432,9 +432,8 @@ Fixpoint split_last z :=
   end.
 
 (* Returns the sub-zone of [z] starting at offset [ofs] and of length [len].
-   There is a special case if we access the full sub-region. In that case, [z]
-   is returned.
 *)
+(* TODO: is_const s.(ss_len) is useless, remove? *)
 Definition sub_zone_at_ofs (z:symbolic_zone) ofs len :=
   (* TODO: z is never nil, but check this *)
   let: (z', s) := split_last z in
