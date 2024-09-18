@@ -485,17 +485,20 @@ Fixpoint get_suffix (z1 z2 : symbolic_zone) : option (option symbolic_zone) :=
       else if odflt false (symbolic_slice_ble s1 s2) then Some None
       else if odflt false (symbolic_slice_ble s2 s1) then Some None
       else
-        match is_const s1.(ss_ofs), is_const s1.(ss_len), is_const s2.(ss_ofs), is_const s2.(ss_len) with
-        | Some ofs1, Some len1, Some ofs2, Some len2 =>
-          let m := Z.max ofs1 ofs2 in
-          let ofs := (m - ofs1)%Z in
-          let len := (Z.min (ofs1 + len1) (ofs2 + len2) - m)%Z in
-          (* special case when this is the full zone *)
-          if ((ofs == 0) && (len == len1))%Z then Some (Some [::])
-          else
-            Some (Some [:: {| ss_ofs := ofs; ss_len := len |}])
-        | _, _, _, _ => None
-        end
+        (* special case: z1 is nil and s1 is made up of constants *)
+        if z1 is [::] then
+          match is_const s1.(ss_ofs), is_const s1.(ss_len), is_const s2.(ss_ofs), is_const s2.(ss_len) with
+          | Some ofs1, Some len1, Some ofs2, Some len2 =>
+            let m := Z.max ofs1 ofs2 in
+            let ofs := (m - ofs1)%Z in
+            let len := (Z.min (ofs1 + len1) (ofs2 + len2) - m)%Z in
+            (* special case when this is the full zone *)
+            if ((ofs == 0) && (len == len1))%Z then Some (Some [::])
+            else
+              Some (Some [:: {| ss_ofs := ofs; ss_len := len |}])
+          | _, _, _, _ => None
+          end
+        else None
     end
   end.
 
