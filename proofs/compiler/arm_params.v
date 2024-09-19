@@ -285,11 +285,13 @@ Definition arm_szparams : stack_zeroization_params :=
 
 Definition arm_is_move_op (o : asm_op_t) : bool :=
   match o with
-  | BaseOp (None, ARM_op MOV opts) =>
+  | BaseOp (None, ARM_op o opts) =>
+    if o \in [:: MOV; LDR; STR; STRB; STRH ] then
       [&& ~~ set_flags opts
         , ~~ is_conditional opts
         & ~~ has_shift opts
       ]
+    else false
 
   | _ =>
       false
