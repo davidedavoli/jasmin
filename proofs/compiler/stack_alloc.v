@@ -531,6 +531,10 @@ Definition clear_status status (z:symbolic_zone) :=
     end
   end.
 
+(* stack ptr pointers are not in var_region, so they are systematically cleared
+   if they are in the same region as the cleared zone. It seems that it does
+   not happen in practice. To be more precise, one solution could be to
+   add them to var_region. *)
 Definition clear_status_map_aux rmap z x status :=
   let%opt z :=
     let%opt sr := Mvar.get rmap.(var_region) x in
@@ -580,13 +584,13 @@ Definition set_word rmap al sr (x:var_i) status ws :=
     {| var_region := rmap.(var_region);
        region_var := set_word_status rmap sr x status |}.
 
-Definition set_move_status rv x sr status :=
-  let sm := get_status_map rv sr.(sr_region) in
+Definition set_move_status rv x r status :=
+  let sm := get_status_map rv r in
   let sm := set_status sm x status in
-  Mr.set rv sr.(sr_region) sm.
+  Mr.set rv r sm.
 
 Definition set_move (rmap:region_map) x sr status :=
-  let rv := set_move_status rmap x sr status in
+  let rv := set_move_status rmap x sr.(sr_region) status in
   {| var_region := Mvar.set rmap.(var_region) x sr;
      region_var := rv |}.
 
@@ -619,15 +623,23 @@ Definition sub_region_stkptr s ws cs :=
 
 Definition set_stack_ptr (rmap:region_map) s ws cs (x':var) :=
   let sr := sub_region_stkptr s ws cs in
-  let rv := set_move_status rmap x' sr Valid in
+  let rv := set_move_status rmap x' sr.(sr_region) Valid in
   {| var_region := rmap.(var_region);
      region_var := rv |}.
 
 (* Checks that the stack pointer itself (not the pointed data) is valid *)
 Definition check_stack_ptr rmap s ws cs x' :=
-  let sr := sub_region_stkptr s ws cs in
-  let status := get_var_status rmap sr.(sr_region) x' in
-  is_valid status.
+  if Mvar.get rmap.(var_region) x' then
+    (* Currently, x' is never put in the var_region. We could have an invariant
+       about that (such as "any var in vnew is not in rmap"). For now, we just
+       add a check here. This check allows to ensure that
+       [sub_region_stkptr s ws cs] was conservatively cleared if we wrote
+       anywhere in the same region. *)
+    false
+  else
+    let sr := sub_region_stkptr s ws cs in
+    let status := get_var_status rmap sr.(sr_region) x' in
+    is_valid status.
 
 Definition sub_region_full x r :=
   let z := [:: {| ss_ofs := Pconst 0; ss_len := Pconst (size_slot x) |}] in
