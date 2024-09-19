@@ -2769,22 +2769,6 @@ Proof.
   by apply (zbetween_sub_region_addr_ofs hwf haddr hbound).
 Qed.
 
-Lemma validw_sub_region_addr se rmap m0 s1 s2 sr ws ofs al :
-  valid_state se rmap m0 s1 s2 ->
-  wf_sub_region se sr (sword ws) ->
-  sub_region_addr se sr = ok ofs ->
-  is_aligned_if al ofs ws ->
-  validw s2.(emem) al ofs ws.
-Proof.
-  move=> hvs hwf haddr hal.
-  have /vs_slot_valid hptr := hwf.(wfr_slot).
-  apply /validwP; split=> //.
-  move=> k hk; rewrite (validw8_alignment Aligned); apply hptr; move: hk.
-  apply: between_byte.
-  + by apply (no_overflow_sub_region_addr hwf haddr).
-  by apply (zbetween_sub_region_addr hwf haddr).
-Qed.
-
 Lemma alloc_lvalP se rmap r1 r2 v ty m0 (s1 s2: estate) :
   alloc_lval pmap rmap r1 ty = ok r2 -> 
   valid_state se rmap m0 s1 s2 -> 
@@ -2816,10 +2800,12 @@ Proof.
     rewrite ok_wi /= truncate_word_u /=.
     have := htr; rewrite {1}hty =>
       /(vm_truncate_val_subtype_word hdb htyv) [w htrw -> /=].
+    have hofs: 0 <= 0 /\ wsize_size ws <= size_slot x by rewrite hty /=; lia.
     have hvp: validw (emem s2) Aligned (wi + wrepr _ ofsi)%R ws.
     + have [_ halign _] := set_wordP hwf haddr hsetw.
-      move: hwf; rewrite hty => hwf.
-      exact: (validw_sub_region_addr hvs hwf haddr halign).
+      have := validw_sub_region_addr_ofs hvs hwf haddr hofs.
+      rewrite wrepr0 GRing.addr0.
+      by apply.
     have /writeV -/(_ w) [mem2 hmem2] := hvp.
     rewrite hmem2 /=; eexists; first by reflexivity.
     (* valid_state update word *)
@@ -2833,7 +2819,6 @@ Proof.
     rewrite {2}hty htrw; split => //.
     rewrite /eq_sub_region_val_read haddr.
     move=> off _ ? [<-] _ hget.
-    have hofs: 0 <= 0 /\ wsize_size ws <= size_slot x by rewrite hty /=; lia.
     have /= hoff := get_val_byte_bound hget.
     rewrite -(GRing.addr0 (_+_))%R in hmem2.
     rewrite (write_read8_sub_region hwf haddr hofs hmem2) /= ?hty // Z.sub_0_r /=.
@@ -2911,12 +2896,9 @@ Proof.
   rewrite (mk_ofsP aa ws ofsi he1) /= truncate_word_u /= hvw /=.
   have [hge0 hlen haa] := WArray.set_bound htt'.
   have hvp: validw (emem s2) al (wx + wrepr Uptr ofsi + wrepr _ (i1 * mk_scale aa ws))%R ws.
-  + have := validw_sub_region_addr_ofs hvs hwf haddr.
-    apply.
-    rewrite hty. split; done.
-(*     have := validw_sub_region_at_ofs _ hwf; rewrite hty; apply => //. *)
+  + apply (validw_sub_region_addr_ofs hvs hwf haddr); first by rewrite hty.
     have [_ hal _] := set_wordP hwf haddr hset.
-    case: al {htt' hset} haa hal => //= haa hal.
+    case: al haa hal {htt' hset} => //= haa hal.
     apply: is_align_add; first by [].
     by rewrite WArray.arr_is_align.
   have /writeV -/(_ w) [mem2 hmem2] := hvp.
@@ -2924,72 +2906,43 @@ Proof.
   (* valid_state update array *)
   have hofs: 0 <= i1 * mk_scale aa ws /\ i1 * mk_scale aa ws + size_of (sword ws) <= size_slot x.
   + by rewrite hty.
-(*   have hofs' := ofs_bound_option hofs (mk_ofsiP he1). *)
   have hvalideq := write_validw_eq hmem2.
-  have := valid_state_set_word hvs hsr haddr hlx hpk _ hvalideq _ hset htr.
-  apply.
-(*   apply: (valid_state_set_word hvs hwf hlx hpk _ hvalideq _ hset htr). *)
+  apply: (valid_state_set_word hvs hsr haddr hlx hpk _ hvalideq _ hset htr).
   + by apply (Memory.write_mem_stable hmem2).
   + move=> al' p ws' hdisj.
     apply (writeP_neq _ hmem2).
     apply: disjoint_range_alt.
     apply: disjoint_zrange_incl_l hdisj.
-    apply (zbetween_sub_region_addr_ofs hwf haddr). rewrite hty; split => //.
+    by apply (zbetween_sub_region_addr_ofs hwf haddr).
   have /vm_truncate_valE [_ ->]:= htr.
   split=> //.
-  
   rewrite /eq_sub_region_val_read haddr.
-    move=> off _ ? [<-] hvalid hget.
-    have /= hoff := get_val_byte_bound hget.
-    rewrite (read8_alignment al) (write_read8_sub_region hwf haddr hofs hmem2) /= ?hty //.
-    move: hget; rewrite /= (write_read8 htt') WArray.subE /=.
+  move=> off _ ? [<-] hvalid hget.
+  have /= hoff := get_val_byte_bound hget.
+  rewrite (read8_alignment al) (write_read8_sub_region hwf haddr hofs hmem2) /= ?hty //.
+  move: hget; rewrite /= (write_read8 htt') WArray.subE /=.
   case: ifP => // hle.
   have hgvalid := check_gvalid_lvar hsr.
   assert (hval := wfr_val hgvalid hxt).
   case: hval => hread _.
   rewrite (read8_alignment Aligned).
-  apply hread. done. done. (*
-    
-    have hofs: 0 <= 0 /\ wsize_size ws <= size_slot x by rewrite hty /=; lia.
-    have /= hoff := get_val_byte_bound hget.
-    rewrite -(GRing.addr0 (_+_))%R in hmem2.
-    rewrite (write_read8_sub_region hwf haddr hofs hmem2) /= ?hty // Z.sub_0_r /=.
-    move: (hoff); rewrite -!zify => ->.
-    by rewrite -(get_val_byte_word _ hoff).
-  
-  
-  move=> off hmem w0 hget'.
-  have /= hoff := get_val_byte_bound hget'.
-  rewrite (read8_alignment al) (write_read8_sub_region hwf hofs hmem2) /= ?hty //.
-  move: hget'; rewrite /= (write_read8 htt') WArray.subE /=.
-  case: ifP => // hle.
-  assert (hval := wfr_val hgvalid hxt).
-  case: hval => hread _.
-  rewrite (read8_alignment Aligned).
-  apply hread.
-  move: hset hmem => /set_sub_regionP [_ ->] /=.
-  rewrite get_var_bytes_set_pure_bytes !eq_refl /=.
-  case heq: mk_ofsi => [ofs'|//].
-  have := mk_ofsiP he1 (aa:=aa) (sz:=ws).
-  rewrite heq => /(_ ltac:(discriminate)) [->].
-  rewrite ByteSet.addE => /orP [|//].
-  by move /andP : hle; rewrite /I.memi /= !zify; lia. *)
+  by apply hread.
 Qed.
 
-Lemma alloc_lvalsP rmap r1 r2 vs ty m0 (s1 s2: estate) :
+Lemma alloc_lvalsP se rmap r1 r2 vs ty m0 (s1 s2: estate) :
   alloc_lvals pmap rmap r1 ty = ok r2 -> 
-  valid_state rmap m0 s1 s2 -> 
+  valid_state se rmap m0 s1 s2 -> 
   seq.map type_of_val vs = ty -> 
   forall s1', write_lvals true gd s1 r1 vs = ok s1' ->
-  exists s2', write_lvals true [::] s2 r2.2 vs = ok s2' /\ valid_state r2.1 m0 s1' s2'.
+  exists2 s2', write_lvals true [::] s2 r2.2 vs = ok s2' & valid_state se r2.1 m0 s1' s2'.
 Proof.
   elim: r1 r2 rmap ty vs s1 s2=> //= [|a l IH] r2 rmap [ | ty tys] // [ | v vs] //.
-  + move=> s1 s2 [<-] Hvalid _ s1' [] <-; by exists s2; split.
+  + move=> s1 s2 [<-] Hvalid _ s1' [] <-; by exists s2.
   move=> vs's1 s2; t_xrbindP => -[a' r3] ha [l' r4] /IH hrec <-.
   move=> Hvalid [] hty htys s1' s1'' ha1 hl1.
-  have [s2' [hs2' vs2']]:= alloc_lvalP ha Hvalid hty ha1.
-  have [s2'' [hs2'' vs2'']]:= hrec _ _ _ vs2' htys _ hl1.
-  by exists s2''; split => //=; rewrite hs2'.
+  have [s2' hs2' vs2']:= alloc_lvalP ha Hvalid hty ha1.
+  have [s2'' hs2'' vs2'']:= hrec _ _ _ vs2' htys _ hl1.
+  by exists s2'' => //=; rewrite hs2'.
 Qed.
 
 Variable (P' : sprog).
