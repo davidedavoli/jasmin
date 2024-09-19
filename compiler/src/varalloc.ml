@@ -245,7 +245,7 @@ let init_slots pd stack_pointers alias coloring fv =
           match c.kind with
           | Range r ->
             add_local v (Direct (c.in_var, r2i r, E.Sglob))
-          | Align _ -> hierror ~loc:(Lone v.v_dloc) "align not possible for stack (global)"
+          | Align _ -> () 
         else
           begin
             let slot = get_slot coloring c.in_var in
@@ -253,7 +253,8 @@ let init_slots pd stack_pointers alias coloring fv =
             match c.kind with
             | Range r ->
               add_local v (Direct (slot, r2i r, E.Slocal))
-            | Align _ -> hierror ~loc:(Lone v.v_dloc) "align not possible for stack (local)"
+            | Align _ ->
+        add_local v (Direct (slot, r2i(0, size_of v.v_ty), E.Slocal))
           end
       else
         let sz = size_of v.v_ty in

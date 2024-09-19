@@ -238,6 +238,10 @@ let opn_cc o =
   | _ -> None 
 
 let rec analyze_instr_r params cc a =
+  let pp_map fmt a =
+    Mv.iter (fun k v -> Format.fprintf fmt "%a -> %a@;" (Printer.pp_var ~debug:true) k pp_slice v) a
+  in
+  Format.eprintf "@[<v 2>analyse_instr_r@;%a@]@." pp_map a;
   function
   | Cfor _ -> assert false
   | Ccall (xs, fn, es) -> link_array_return params a xs es (cc fn)
@@ -280,6 +284,7 @@ let analyze_fd_ignore cc fd =
   Format.eprintf "Aliasing forest for function %s:@.%a@." fd.f_name.fn_name pp_alias a
 
 let analyze_prog fds =
+  let _ = assert false in
   let cc : int option list Hf.t = Hf.create 17 in
   let get_cc = Hf.find cc in
   List.fold_right (fun fd () ->
