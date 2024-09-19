@@ -533,8 +533,8 @@ Definition clear_status status (z:symbolic_zone) :=
 
 (* stack ptr pointers are not in var_region, so they are systematically cleared
    if they are in the same region as the cleared zone. It seems that it does
-   not happen in practice. To be more precise, one solution could be to
-   add them to var_region. *)
+   not happen in practice. To have a more precise analysis, one solution could
+   be to add them to var_region. *)
 Definition clear_status_map_aux rmap z x status :=
   let%opt z :=
     let%opt sr := Mvar.get rmap.(var_region) x in
@@ -628,18 +628,10 @@ Definition set_stack_ptr (rmap:region_map) s ws cs (x':var) :=
      region_var := rv |}.
 
 (* Checks that the stack pointer itself (not the pointed data) is valid *)
-Definition check_stack_ptr rmap s ws cs x' :=
-  if Mvar.get rmap.(var_region) x' then
-    (* Currently, x' is never put in the var_region. We could have an invariant
-       about that (such as "any var in vnew is not in rmap"). For now, we just
-       add a check here. This check allows to ensure that
-       [sub_region_stkptr s ws cs] was conservatively cleared if we wrote
-       anywhere in the same region. *)
-    false
-  else
-    let sr := sub_region_stkptr s ws cs in
-    let status := get_var_status rmap sr.(sr_region) x' in
-    is_valid status.
+Definition check_stack_ptr rv s ws cs x' :=
+  let sr := sub_region_stkptr s ws cs in
+  let status := get_var_status rv sr.(sr_region) x' in
+  is_valid status.
 
 Definition sub_region_full x r :=
   let z := [:: {| ss_ofs := Pconst 0; ss_len := Pconst (size_slot x) |}] in
@@ -1066,11 +1058,11 @@ Definition is_stack_ptr vpk :=
    actually fails only on the [Pstkptr] case, that is treated apart.
    Thus function [mk_addr_pexpr] never fails, but this is not checked statically.
 *)
-Definition mk_addr_pexpr rmap x vpk :=
+Definition mk_addr_pexpr rv x vpk :=
   if is_stack_ptr vpk is Some (s, ofs, ws, cs, f) then
     Let _ :=
       assert
-        (check_stack_ptr rmap s ws cs f)
+        (check_stack_ptr rv s ws cs f)
         (stk_error x (pp_box [::
           pp_s "the stack pointer"; pp_var x; pp_s "is no longer valid"]))
     in

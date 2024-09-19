@@ -2545,62 +2545,61 @@ Lemma is_valid_valid_offset se status off :
   valid_offset se status off.
 Proof. by case: status. Qed.
 
-(* I tried to avoid proof duplication with this auxiliary lemma. But there is
-   some duplication even in the proof of this lemma...
-*)
-Lemma valid_pk_set_word se sr (x:var_i) ofs rmap al status ws rmap2 y pk sry s2 mem2 :
-  wf_sub_region se sr x.(vtype) ->
+Lemma var_region_not_new se rmap s2 x sr :
+  wfr_PTR se rmap s2 ->
+  Mvar.get rmap.(var_region) x = Some sr ->
+  ~ Sv.In x pmap.(vnew).
+Proof. by move=> /[apply] -[_ [/wf_vnew ? _]]. Qed.
+
+Lemma valid_pk_set_word_status se rmap s1 s2 x sr ofs mem2 status y pk sry :
+  wf_rmap se rmap s1 s2 ->
+  Mvar.get rmap.(var_region) x = Some sr ->
   sub_region_addr se sr = ok ofs ->
   ~ Sv.In x pmap.(vnew) ->
   (forall al p ws,
     disjoint_zrange ofs (size_slot x) p (wsize_size ws) ->
     read mem2 al p ws = read (emem s2) al p ws) ->
-  set_word rmap al sr x status ws = ok rmap2 ->
   wf_local y pk ->
   valid_pk se rmap s2 sry pk ->
-  valid_pk se rmap2 (with_mem s2 mem2) sry pk.
+  valid_pk se (set_word_status rmap sr x status) (with_mem s2 mem2) sry pk.
 Proof.
-  move=> hwf haddr hnin hreadeq hset hlocal hpk.
+  move=> hwfr hsr haddr hnin hreadeq hlocal hpk.
   case: pk hlocal hpk => //= s ofs' ws' z f hlocal hpk.
-  have [_ _ ->] := set_wordP hwf haddr hset.
-  rewrite /check_stack_ptr /=.
-  case hf: Mvar.get => [//|] /=.
-  rewrite get_var_status_set_word_status.
+  rewrite /check_stack_ptr get_var_status_set_word_status.
   case: eqP => heqr /=.
   + case: eqP => heq2.
     + by have := hlocal.(wfs_new); congruence.
     move=> hvalid.
     have {}hvalid := is_valid_valid_offset se 0 hvalid. (* we use 0, ugly! *)
-    have [_ [+ [+ _]]] := valid_offset_clear_status_map_aux hvalid.
-    by rewrite hf.
+    have [_ [srf [hsrf _]]] := valid_offset_clear_status_map_aux hvalid.
+    by case (var_region_not_new wfr_ptr hsrf hlocal.(wfs_new)).
   move=> hvalid pofs ofsy haddrp haddry.
-  rewrite -(hpk _ _ _ haddrp haddry); last first.
-  + by rewrite /check_stack_ptr hf.
+  rewrite -(hpk hvalid _ _ haddrp haddry).
   apply hreadeq.
   apply disjoint_zrange_sym.
+  have /wfr_wf hwf := hsr.
   have hwfp := sub_region_stkptr_wf se hlocal.
   apply: (distinct_regions_disjoint_zrange hwfp haddrp hwf haddr _ erefl).
   by apply not_eq_sym.
 Qed.
 
-Lemma wfr_PTR_set_sub_region se (x:var_i) pk sr ofs (rmap:region_map) s2 mem2 al status ws rmap2 :
-  get_local pmap x = Some pk ->
-  wf_sub_region se sr x.(vtype) ->
+Lemma wfr_PTR_set_sub_region se rmap s1 s2 (x:var_i) sr ofs mem2 al status ws rmap2 :
+  wf_rmap se rmap s1 s2 ->
+  Mvar.get rmap.(var_region) x = Some sr ->
   sub_region_addr se sr = ok ofs ->
-  valid_pk se rmap s2 sr pk ->
   (forall al p ws,
     disjoint_zrange ofs (size_slot x) p (wsize_size ws) ->
     read mem2 al p ws = read (emem s2) al p ws) ->
   set_word rmap al sr x status ws = ok rmap2 ->
-  wfr_PTR se rmap s2 ->
   wfr_PTR se rmap2 (with_mem s2 mem2).
 Proof.
-  move=> hlx hwf haddr hpk hreadeq hset hptr y sry.
-  have [_ _ {1}->] /= := set_wordP hwf haddr hset.
-  move=> /hptr [pky [hly hpky]].
+  move=> hwfr hsr haddr hreadeq hset y sry.
+  have /wfr_wf hwf := hsr.
+  have [_ _ ->] /= := set_wordP hwf haddr hset.
+  move=> /wfr_ptr [pky [hly hpky]].
   exists pky; split=> //.
-  have /wf_vnew hnnew := hlx.
-  by apply (valid_pk_set_word hwf haddr hnnew hreadeq hset (wf_locals hly) hpky).
+  have /wfr_ptr [_ [/wf_vnew hnnew _]] := hsr.
+  by apply (valid_pk_set_word_status _ hwfr hsr haddr hnnew hreadeq (wf_locals hly) hpky).
 Qed.
 
 (* This lemma is used for [set_sub_region] and [set_stack_ptr]. *)
@@ -2668,7 +2667,7 @@ Proof.
     + have [_ _ ->] := set_wordP hwf haddr hset.
       by move=> ?? /=; apply hwfsr.
     + by apply (wfr_VAL_set_word hwfr hsr haddr hreadeq hset htr heqval).
-    by apply (wfr_PTR_set_sub_region hlx hwf haddr hpk hreadeq hset hptr).
+    by apply (wfr_PTR_set_sub_region hwfr hsr haddr hreadeq hset).
   + by apply (eq_mem_source_write_slot hvs hwf haddr hreadeq).
   by rewrite -(ss_top_stack hss).
 Qed.
@@ -2747,9 +2746,6 @@ Proof.
   by lia.
 Qed.
 
-(* FIXME: proper proof
-   either use the previous result or deduce the previous result!
-   or just one result *)
 Lemma validw_sub_region_addr_ofs se rmap m0 s1 s2 sr ty addr ofs al ws :
   valid_state se rmap m0 s1 s2 ->
   wf_sub_region se sr ty ->
@@ -2949,17 +2945,6 @@ Variable (P' : sprog).
 Hypothesis P'_globs : P'.(p_globs) = [::].
 
 Local Opaque arr_size.
-
-Lemma get_ofs_subP wdb gd s i aa ws x e ofs :
-  sem_pexpr wdb gd s e >>= to_int = ok i ->
-  get_ofs_sub aa ws x e = ok ofs ->
-  ofs = i * mk_scale aa ws.
-Proof.
-  move=> he; rewrite /get_ofs_sub.
-  case heq: mk_ofsi => [ofs'|//] [<-].
-  have := mk_ofsiP he (aa:=aa) (sz:=ws).
-  by rewrite heq; move=> /(_ ltac:(discriminate)) [->].
-Qed.
 
 Lemma get_var_bytes_set_move_bytes rmap x sr bytes r y :
   get_var_bytes (set_move_bytes rmap x sr bytes) r y =
@@ -3269,12 +3254,6 @@ Proof.
   have /wf_locals /wfs_new := hly.
   by have /wf_vnew := hlx; congruence.
 Qed.
-
-Lemma var_region_not_new rmap m0 s1 s2 x sr :
-  valid_state rmap m0 s1 s2 ->
-  Mvar.get rmap.(var_region) x = Some sr ->
-  ~ Sv.In x pmap.(vnew).
-Proof. by move=> hvs /wfr_ptr [_ [/wf_vnew ? _]]. Qed.
 
 (* The lemma manipulates [set_stack_ptr (set_move ...)], rather than
    [set_stack_ptr] alone.
