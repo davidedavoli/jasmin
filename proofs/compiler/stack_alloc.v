@@ -1058,7 +1058,7 @@ Definition is_stack_ptr vpk :=
    actually fails only on the [Pstkptr] case, that is treated apart.
    Thus function [mk_addr_pexpr] never fails, but this is not checked statically.
 *)
-Definition mk_addr_pexpr rv x vpk :=
+Definition addr_from_vpk_pexpr rv x vpk :=
   if is_stack_ptr vpk is Some (s, ofs, ws, cs, f) then
     Let _ :=
       assert
@@ -1088,7 +1088,7 @@ Definition alloc_array_move table rmap r tag e :=
       | None => Error (stk_ierror_basic yv "register array remains")
       | Some vpk =>
         Let: (sr, status) := get_gsub_region_status rmap yv vpk in
-        Let eofs := mk_addr_pexpr rmap yv vpk in
+        Let eofs := addr_from_vpk_pexpr rmap yv vpk in
         ok (table, sr, status, mk_mov vpk, eofs.1, cast_const eofs.2)
       end
     | Psub aa ws len y e1 =>
@@ -1102,7 +1102,7 @@ Definition alloc_array_move table rmap r tag e :=
         let ofs := mk_ofs_int aa ws se1 in
         let len := Pconst (arr_size ws len) in
         let (sr, status) := sub_region_status_at_ofs yv sr status ofs len in
-        Let eofs := mk_addr_pexpr rmap yv vpk in
+        Let eofs := addr_from_vpk_pexpr rmap yv vpk in
         ok (table, sr, status, mk_mov vpk, eofs.1, mk_ofs aa ws e1 eofs.2)
       end
     | _ => Error (stk_ierror_no_var "alloc_array_move: variable/subarray expected (y)")
@@ -1201,7 +1201,7 @@ Definition alloc_protect_ptr rmap ii r t e msf :=
         Let _ := assert (if r is Lvar _ then true else false)
                         (stk_error_no_var "destination of protect_ptr should be a reg ptr") in
         Let: (sr, status) := get_gsub_region_status rmap yv vpk in
-        Let: (e, _ofs) := mk_addr_pexpr rmap yv vpk in (* ofs is ensured to be 0 *)
+        Let: (e, _ofs) := addr_from_vpk_pexpr rmap yv vpk in (* ofs is ensured to be 0 *)
         ok (sr, status, vpk, e)
       end
     | Psub _ _ _ _ _ =>

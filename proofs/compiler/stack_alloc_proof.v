@@ -2415,13 +2415,13 @@ Qed.
 
 Lemma get_var_status_set_word_status rmap sr x status r y :
   get_var_status (set_word_status rmap sr x status) r y =
-    let status0 := get_var_status rmap r y in
+    let statusy := get_var_status rmap r y in
     if sr.(sr_region) != r then
-      status0
+      statusy
     else
       if x == y then status
       else
-        odflt Unknown (clear_status_map_aux rmap sr.(sr_zone) y status0).
+        odflt Unknown (clear_status_map_aux rmap sr.(sr_zone) y statusy).
 Proof.
   rewrite /set_word_status /get_var_status.
   rewrite get_status_map_setP.
@@ -2618,20 +2618,6 @@ Proof.
   apply (disjoint_zrange_incl_l (zbetween_sub_region_addr hwf haddr)).
   by apply (vs_disjoint hwf.(wfr_slot) hvp).
 Qed.
-
-(*
-(* TODO: better name? *)
-Lemma wfr_WF_set rmap x sr rmap2 :
-  wfr_WF rmap ->
-  wf_sub_region sr x.(vtype) ->
-  rmap2.(var_region) = Mvar.set rmap.(var_region) x sr ->
-  wfr_WF rmap2.
-Proof.
-  move=> hwsrf hwfsr hrmap2 y sry.
-  rewrite hrmap2 Mvar.setP.
-  by case: eqP; [congruence|auto].
-Qed.
-*)
 
 (* We show that, under the right hypotheses, [set_word] preserves
    the [valid_state] invariant.
@@ -2946,45 +2932,44 @@ Hypothesis P'_globs : P'.(p_globs) = [::].
 
 Local Opaque arr_size.
 
-Lemma get_var_bytes_set_move_bytes rmap x sr bytes r y :
-  get_var_bytes (set_move_bytes rmap x sr bytes) r y =
-    let bytesy := get_var_bytes rmap r y in
-    if sr_region sr != r then
-      bytesy
+Lemma get_var_status_set_move_status rv x r status ry y :
+  get_var_status (set_move_status rv x r status) ry y =
+    let statusy := get_var_status rv ry y in
+    if r != ry then
+      statusy
     else
-      if x == y then
-        ByteSet.union
-          (ByteSet.remove bytesy (interval_of_zone sr.(sr_zone))) bytes
-      else bytesy.
+      if x == y then status
+      else statusy.
 Proof.
-  rewrite /set_move_bytes /get_var_bytes get_bytes_map_setP.
+  rewrite /set_move_status /get_var_status get_status_map_setP.
   case: eqP => //= <-.
-  rewrite get_bytes_setP.
+  rewrite get_status_setP.
   by case: eqP => //= <-.
 Qed.
 
-Lemma check_gvalid_set_move rmap x sr bytes y sry bytesy :
-  check_gvalid (set_move rmap x sr bytes) y = Some (sry, bytesy) ->
+Lemma check_gvalid_set_move rmap x sr status y sry statusy :
+  check_gvalid (set_move rmap x sr status) y = Some (sry, statusy) ->
     [/\ ~ is_glob y, x = gv y, sr = sry &
-        bytesy = get_var_bytes (set_move_bytes rmap x sr bytes) sr.(sr_region) x]
+        statusy = status]
   \/
     [/\ ~ is_glob y -> x <> gv y &
-        check_gvalid rmap y = Some (sry, bytesy)].
+        check_gvalid rmap y = Some (sry, statusy)].
 Proof.
   rewrite /check_gvalid.
   case: (@idP (is_glob y)) => hg.
   + case heq: Mvar.get => [[ofs ws]|//] [<- <-].
     by right; split.
   rewrite Mvar.setP; case: eqP.
-  + by move=> -> [<- <-]; left; split.
+  + move=> -> [<- <-]; left; split=> //.
+    by rewrite get_var_status_set_move_status !eq_refl.
   move=> hneq.
   case heq': Mvar.get => [sr'|//] [? <-]; subst sr'.
   right; split => //.
-  rewrite get_var_bytes_set_move_bytes.
+  rewrite get_var_status_set_move_status.
   case: eqP => [_|//].
   by move: hneq=> /eqP /negPf ->.
 Qed.
-
+(*
 Lemma set_arr_subP rmap x ofs len sr_from bytesy rmap2 :
   set_arr_sub rmap x ofs len sr_from bytesy = ok rmap2 ->
   exists sr, [/\
@@ -3019,12 +3004,13 @@ Proof.
   case: eqP => //= _.
   by move: hneq=> /eqP /negPf ->.
 Qed.
-
+*)
 Lemma type_of_get_gvar_array wdb gd vm x n (a : WArray.array n) :
   get_gvar wdb gd vm x = ok (Varr a) ->
   x.(gv).(vtype) = sarr n.
 Proof. by move=> /get_gvar_compat; rewrite /compat_val /= orbF => -[_] /compat_typeEl. Qed.
 
+(*
 Lemma get_Pvar_sub_bound wdb s1 v e y suby ofs len :
   sem_pexpr wdb gd s1 e = ok v ->
   get_Pvar_sub e = ok (y, suby) ->
@@ -3081,6 +3067,7 @@ Proof.
   rewrite (WArray.get_sub_get8 hgsub) /=.
   by move: hbound; rewrite -!zify => ->.
 Qed.
+*)
 
 Lemma is_stack_ptrP vpk s ofs ws z f :
   is_stack_ptr vpk = Some (s, ofs, ws, z, f) ->
@@ -3090,33 +3077,33 @@ Proof.
   by move=> _ _ _ _ _ [-> -> -> -> ->].
 Qed.
 
-(* is mk_addr_pexpr a good name ?
-   could be pexpr_addr_from_vpk ?
-*)
-Lemma mk_addr_pexprP wdb rmap m0 s1 s2 (x : var_i) vpk sr e1 ofs :
-  valid_state rmap m0 s1 s2 ->
+Lemma addr_from_vpk_pexprP se rmap m0 s1 s2 (x : var_i) vpk sr ty e1 ofs wdb :
+  valid_state se rmap m0 s1 s2 ->
   wf_vpk x vpk ->
-  valid_vpk rmap s2 x sr vpk ->
-  mk_addr_pexpr pmap rmap x vpk = ok (e1, ofs) ->
-  exists w,
-    sem_pexpr wdb [::] s2 e1 >>= to_pointer = ok w /\
-    sub_region_addr sr = (w + wrepr _ ofs)%R.
+  valid_vpk se rmap s2 x sr vpk ->
+  wf_sub_region se sr ty ->
+  addr_from_vpk_pexpr pmap rmap x vpk = ok (e1, ofs) ->
+  exists2 w,
+    sem_pexpr wdb [::] s2 e1 >>= to_pointer = ok w &
+    sub_region_addr se sr = ok (w + wrepr _ ofs)%R.
 Proof.
-  move=> hvs hwfpk hpk.
-  rewrite /mk_addr_pexpr.
+  move=> hvs hwfpk hpk hwf.
+  rewrite /addr_from_vpk_pexpr.
   case heq: is_stack_ptr => [[[[[s ws] ofs'] z] f]|]; last first.
-  + by t_xrbindP=> -[x' ofs'] /(addr_from_vpkP hvs wdb hwfpk hpk) haddr <- <-.
+  + by t_xrbindP=> -[x' ofs'] /(addr_from_vpkP hvs wdb hwfpk hpk hwf) haddr <- <-.
   move /is_stack_ptrP in heq; subst vpk.
   rewrite /= in hpk hwfpk.
   t_xrbindP=> /hpk hread <- <- /=.
-  rewrite (sub_region_addr_stkptr hwfpk) in hread.
+  have [cs ok_cs _] := hwf.(wfsr_zone).
+  have [addr haddr _] := wunsigned_sub_region_addr hwf ok_cs.
+  have haddrp := sub_region_addr_stkptr se hwfpk.
   rewrite
     truncate_word_u /=
     /get_var vs_rsp /= orbT /=
     truncate_word_u /=
-    hread /=
+    (hread _ _ haddrp haddr) /=
     truncate_word_u.
-  eexists; split; first by reflexivity.
+  eexists; first by reflexivity.
   by rewrite wrepr0 GRing.addr0.
 Qed.
 
@@ -3133,38 +3120,49 @@ Proof.
   by case: hbound => _ /ZltP ->.
 Qed.
 
-Lemma valid_pk_set_move (rmap:region_map) s2 x sr bytes y pk sry :
-  ~ Sv.In x pmap.(vnew) ->
-  wf_local y pk ->
-  valid_pk rmap s2 sry pk ->
-  valid_pk (set_move rmap x sr bytes) s2 sry pk.
+Lemma wfr_WF_set se sr x rmap rmap2 :
+  wf_sub_region se sr x.(vtype) ->
+  rmap2.(var_region) = Mvar.set rmap.(var_region) x sr ->
+  wfr_WF se rmap ->
+  wfr_WF se rmap2.
 Proof.
-  move=> hnnew hlocal.
-  case: pk hlocal => //=.
-  move=> s ofs ws z f hlocal.
-  rewrite /check_stack_ptr get_var_bytes_set_move_bytes.
-  case: eqP => [_|//].
-  case: eqP => //.
-  by have := hlocal.(wfs_new); congruence.
+  move=> hwf hrmap2 hwfr y sry.
+  rewrite hrmap2 Mvar.setP.
+  by case: eqP; [congruence|auto].
 Qed.
 
-Lemma wfr_VAL_set_move rmap s1 s2 x sr bytes v :
+Lemma wfr_VAL_set_move se rmap s1 s2 x sr status v :
   truncatable true (vtype x) v ->
-  eq_sub_region_val x.(vtype) (emem s2) sr (get_var_bytes (set_move rmap x sr bytes) sr.(sr_region) x)
+  eq_sub_region_val se x.(vtype) (emem s2) sr status
     (vm_truncate_val (vtype x) v) ->
-  wfr_VAL rmap s1 s2 ->
-  wfr_VAL (set_move rmap x sr bytes) (with_vm s1 (evm s1).[x <- v]) s2.
+  wfr_VAL se rmap s1 s2 ->
+  wfr_VAL se (set_move rmap x sr status) (with_vm s1 (evm s1).[x <- v]) s2.
 Proof.
   move=> htr heqval hval y sry bytesy vy /check_gvalid_set_move [].
   + by move=> [? ? <- ->]; subst x; rewrite get_gvar_eq //; t_xrbindP => hd <-.
   by move=> [? hgvalid]; rewrite get_gvar_neq => //; apply hval.
 Qed.
 
-Lemma wfr_PTR_set_move (rmap : region_map) s2 x pk sr bytes :
+Lemma valid_pk_set_move se (rmap:region_map) x sr status s2 y pky sry :
+  ~ Sv.In x pmap.(vnew) ->
+  wf_local y pky ->
+  valid_pk se rmap s2 sry pky ->
+  valid_pk se (set_move rmap x sr status) s2 sry pky.
+Proof.
+  move=> hnnew hlocal.
+  case: pky hlocal => //=.
+  move=> s ofs ws z f hlocal.
+  rewrite /check_stack_ptr get_var_status_set_move_status.
+  case: eqP => [_|//].
+  case: eqP => //.
+  by have := hlocal.(wfs_new); congruence.
+Qed.
+
+Lemma wfr_PTR_set_move se (rmap : region_map) s2 x pk sr status :
   get_local pmap x = Some pk ->
-  valid_pk rmap s2 sr pk ->
-  wfr_PTR rmap s2 ->
-  wfr_PTR (set_move rmap x sr bytes) s2.
+  valid_pk se rmap s2 sr pk ->
+  wfr_PTR se rmap s2 ->
+  wfr_PTR se (set_move rmap x sr status) s2.
 Proof.
   move=> hlx hpk hptr y sry.
   have /wf_vnew hnnew := hlx.
@@ -3178,15 +3176,14 @@ Proof.
 Qed.
 
 (* There are several lemmas about [set_move] and [valid_state], and all are useful. *)
-Lemma valid_state_set_move rmap m0 s1 s2 x sr bytes pk v :
-  valid_state rmap m0 s1 s2 ->
-  wf_sub_region sr x.(vtype) ->
+Lemma valid_state_set_move se rmap m0 s1 s2 x sr status pk v :
+  valid_state se rmap m0 s1 s2 ->
+  wf_sub_region se sr x.(vtype) ->
   get_local pmap x = Some pk ->
-  valid_pk rmap.(region_var) s2 sr pk ->
+  valid_pk se rmap.(region_var) s2 sr pk ->
   truncatable true (vtype x) v ->
-  eq_sub_region_val x.(vtype) (emem s2) sr (get_var_bytes (set_move rmap x sr bytes) sr.(sr_region) x)
-       (vm_truncate_val (vtype x) v) ->
-  valid_state (set_move rmap x sr bytes) m0 (with_vm s1 (evm s1).[x <- v]) s2.
+  eq_sub_region_val se x.(vtype) (emem s2) sr status (vm_truncate_val (vtype x) v) ->
+  valid_state se (set_move rmap x sr status) m0 (with_vm s1 (evm s1).[x <- v]) s2.
 Proof.
   move=> hvs hwf hlx hpk htr heqval.
   case:(hvs) => hscs hvalid hdisj hincl hincl2 hunch hrip hrsp heqvm hwfr heqmem hglobv htop.
@@ -3194,16 +3191,19 @@ Proof.
   + move=> y hget; rewrite Vm.setP_neq; first by apply heqvm.
     by apply /eqP; rewrite /get_local in hlx; congruence.
   case: (hwfr) => hwfsr hval hptr; split.
-  + by apply (wfr_WF_set hwfsr hwf).
+  + by apply: (wfr_WF_set hwf _ hwfsr).
   + by apply (wfr_VAL_set_move htr heqval hval).
   by apply (wfr_PTR_set_move hlx hpk hptr).
 Qed.
 
+(*
 Lemma ptr_prop x p (w:word Uptr):
   get_local pmap x = Some (Pregptr p) ->
   type_of_val (Vword w) = vtype p.
 Proof. by move=> /wf_locals /= /wfr_rtype ->. Qed.
+*)
 
+(*
 Lemma valid_state_set_move_regptr rmap m0 s1 s2 x sr bytes v p:
   type_of_val (Vword (sub_region_addr sr)) = vtype p ->
   valid_state rmap m0 s1 s2 ->
@@ -3459,19 +3459,25 @@ Proof.
   move: hsub => /ByteSet.subsetP /[apply].
   by rewrite ByteSet.fullE /I.memi /= !zify; lia.
 Qed.
-
+*)
 (* ------------------------------------------------------------------ *)
 
+(* FIXME: move *)
+Require Import stack_alloc_params.
+
+(* FIXME: should sap_mov_ofs takes an offset as argument. It is a pexpr.
+   Should it be of type int or of type word Uptr? For now, it is a word Uptr. *)
 Record h_stack_alloc_params (saparams : stack_alloc_params) :=
   {
     (* [mov_ofs] must behave as described in stack_alloc.v. *)
     mov_ofsP :
-      forall (P' : sprog) s1 e i x tag ofs w vpk s2 ins,
+      forall (P' : sprog) ev s1 e i ofs pofs x tag vpk ins s2,
         p_globs P' = [::]
-        -> (Let i' := sem_pexpr true [::] s1 e in to_pointer i') = ok i
+        -> sem_pexpr true [::] s1 e >>= to_pointer = ok i
+        -> sem_pexpr true [::] s1 ofs >>= to_pointer = ok pofs
         -> sap_mov_ofs saparams x tag vpk e ofs = Some ins
-        -> write_lval true [::] x (Vword (i + wrepr Uptr ofs)) s1 = ok s2
-        -> exists2 vm2, sem_i P' w s1 ins (with_vm s2 vm2) & evm s2 =1 vm2;
+        -> write_lval true [::] x (Vword (i + pofs)) s1 = ok s2
+        -> exists2 vm2, sem_i P' ev s1 ins (with_vm s2 vm2) & evm s2 =1 vm2;
     (* specification of sap_immediate *)
     sap_immediateP :
       forall (P' : sprog) w s (x: var_i) z,
@@ -3496,10 +3502,10 @@ Context
 
 (* ------------------------------------------------------------------ *)
 
-Lemma valid_state_vm_eq s2 vm2 rmap mem s1 : 
+Lemma valid_state_vm_eq s2 vm2 se rmap mem s1 : 
   (evm s2 =1 vm2)%vm ->
-  valid_state rmap mem s1 s2 ->
-  valid_state rmap mem s1 (with_vm s2 vm2).
+  valid_state se rmap mem s1 s2 ->
+  valid_state se rmap mem s1 (with_vm s2 vm2).
 Proof.
   move=> heq [hscs hsl hdisj hincl hincl' hunch hrip hrsp heqvm hwf heqsource hbetw htop]. 
   constructor => //=.
@@ -3510,13 +3516,18 @@ Proof.
   by case: (pk) hv => //= >; rewrite heq.
 Qed.
 
-Lemma alloc_array_moveP m0 s1 s2 s1' rmap1 rmap2 r tag e v v' n i2 :
-  valid_state rmap1 m0 s1 s2 ->
+(* TODO: move? *)
+Context
+  (fresh_var_ident : v_kind -> PrimInt63.int -> string -> stype -> Ident.ident)
+  (string_of_sr : sub_region -> string).
+
+Lemma alloc_array_moveP se m0 s1 s2 s1' table1 rmap1 table2 rmap2 r tag e v v' n i2 :
+  valid_state se rmap1 m0 s1 s2 ->
   sem_pexpr true gd s1 e = ok v ->
   truncate_val (sarr n) v = ok v' ->
   write_lval true gd r v' s1 = ok s1' ->
-  alloc_array_move saparams pmap rmap1 r tag e = ok (rmap2, i2) →
-  ∃ s2' : estate, sem_i P' rip s2 i2 s2' ∧ valid_state rmap2 m0 s1' s2'.
+  alloc_array_move saparams fresh_var_ident string_of_sr pmap table1 rmap1 r tag e = ok (table2, rmap2, i2) →
+  ∃ s2' : estate, sem_i P' rip s2 i2 s2' ∧ valid_state se rmap2 m0 s1' s2'.
 Proof.
   move=> hvs he /truncate_val_typeE[] a' ?? hw; subst v v'.
   rewrite /alloc_array_move.
