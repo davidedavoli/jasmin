@@ -219,17 +219,22 @@ Definition sub_concrete_slice cs1 cs2 :=
   else Error ErrOob.
 
 (* We interpret a symbolic_zone also as a concrete_slice *)
-Fixpoint sem_zone se z :=
+Fixpoint sem_zone_aux se cs z :=
   match z with
-  | [::] => type_error
-  | [:: s] => sem_slice se s
-  | s :: z =>
-    Let cs1 := sem_slice se s in
-    Let cs2 := sem_zone se z in
-    sub_concrete_slice cs1 cs2
+  | [::] => ok cs
+  | s1 :: z =>
+    Let cs1 := sem_slice se s1 in
+    Let cs2 := sub_concrete_slice cs cs1 in
+    sem_zone_aux se cs2 z
   end.
 
-Arguments sem_zone _ _ : simpl nomatch.
+Definition sem_zone se z :=
+  match z with
+  | [::] => type_error
+  | s :: z =>
+    Let cs := sem_slice se s in
+    sem_zone_aux se cs z
+  end.
 
 (* Well-formedness of a [concrete_slice]. *)
 Record wf_concrete_slice (cs : concrete_slice) (ty : stype) (sl : slot) := {
@@ -499,21 +504,111 @@ Proof.
   by apply wf_locals.
 Qed.
 
-(* Predicates about zone: zbetween_zone, disjoint_zones *)
+(* Predicates about concrete slices: zbetween, disjoint *)
 (* -------------------------------------------------------------------------- *)
+
+Definition zbetween_concrete_slice cs1 cs2 :=
+  (cs1.(cs_ofs) <=? cs2.(cs_ofs)) &&
+  (cs2.(cs_ofs) + cs2.(cs_len) <=? cs1.(cs_ofs) + cs1.(cs_len)).
+
+Lemma zbetween_concrete_sliceP cs1 cs2 off :
+  zbetween_concrete_slice cs1 cs2 ->
+  offset_in_concrete_slice cs2 off ->
+  offset_in_concrete_slice cs1 off.
+Proof.
+  rewrite /zbetween_concrete_slice /offset_in_concrete_slice !zify.
+  by lia.
+Qed.
+
+Lemma zbetween_concrete_slice_refl cs : zbetween_concrete_slice cs cs.
+Proof. by rewrite /zbetween_concrete_slice !zify; lia. Qed.
+
+Lemma zbetween_concrete_slice_trans z1 z2 z3 :
+  zbetween_concrete_slice z1 z2 ->
+  zbetween_concrete_slice z2 z3 ->
+  zbetween_concrete_slice z1 z3.
+Proof. by rewrite /zbetween_concrete_slice !zify; lia. Qed.
+
+Lemma sub_concrete_slice_incl cs1 cs2 cs :
+  sub_concrete_slice cs1 cs2 = ok cs ->
+  zbetween_concrete_slice cs1 cs.
+Proof.
+  rewrite /sub_concrete_slice /zbetween_concrete_slice.
+  case: ifP => // + [<-] /=.
+  rewrite !zify.
+  by lia.
+Qed.
+
+Definition disjoint_concrete_slice cs1 cs2 :=
+  (cs1.(cs_ofs) + cs1.(cs_len) <=? cs2.(cs_ofs)) ||
+  (cs2.(cs_ofs) + cs2.(cs_len) <=? cs1.(cs_ofs)).
+
+Lemma disjoint_concrete_sliceP cs1 cs2 off :
+  disjoint_concrete_slice cs1 cs2 ->
+  offset_in_concrete_slice cs1 off ->
+  offset_in_concrete_slice cs2 off ->
+  False.
+Proof.
+  rewrite /disjoint_concrete_slice /offset_in_concrete_slice !zify.
+  by lia.
+Qed.
+
+Lemma disjoint_concrete_slice_sym cs1 cs2 :
+  disjoint_concrete_slice cs1 cs2 = disjoint_concrete_slice cs2 cs1.
+Proof. by rewrite /disjoint_concrete_slice orbC. Qed.
+
+Lemma disjoint_concrete_slice_incl cs1 cs1' cs2 cs2' :
+  zbetween_concrete_slice cs1 cs1' ->
+  zbetween_concrete_slice cs2 cs2' ->
+  disjoint_concrete_slice cs1 cs2 ->
+  disjoint_concrete_slice cs1' cs2'.
+Proof.
+  by rewrite /zbetween_concrete_slice /disjoint_concrete_slice !zify; lia.
+Qed.
+
+Lemma disjoint_concrete_slice_incl_l cs1 cs1' cs2 :
+  zbetween_concrete_slice cs1 cs1' ->
+  disjoint_concrete_slice cs1 cs2 ->
+  disjoint_concrete_slice cs1' cs2.
+Proof.
+  move=> ?; apply disjoint_concrete_slice_incl => //.
+  by apply zbetween_concrete_slice_refl.
+Qed.
+
+Lemma disjoint_concrete_slice_r cs1 cs2 cs2' :
+  zbetween_concrete_slice cs2 cs2' ->
+  disjoint_concrete_slice cs1 cs2 ->
+  disjoint_concrete_slice cs1 cs2'.
+Proof.
+  move=> ?; apply disjoint_concrete_slice_incl => //.
+  by apply zbetween_concrete_slice_refl.
+Qed.
+
 (*
-Definition zbetween_zone z1 z2 :=
-  (z1.(z_ofs) <=? z2.(z_ofs)) && (z2.(z_ofs) + z2.(z_len) <=? z1.(z_ofs) + z1.(z_len)).
+Definition disjoint_symbolic_slice se s1 s2 :=
+  forall cs1 cs2,
+  sem_slice se s1 = ok cs1 ->
+  sem_slice se s2 = ok cs2 ->
+  disjoint_concrete_slice cs1 cs2.
 
-Lemma zbetween_zone_refl z : zbetween_zone z z.
-Proof. by rewrite /zbetween_zone !zify; lia. Qed.
+Definition disjoint_symbolic_zone se z1 z2 :=
+  forall cs1 cs2,
+  sem_zone se z1 = ok cs1 ->
+  sem_zone se z2 = ok cs2 ->
+  disjoint_concrete_slice cs1 cs2.
 
-Lemma zbetween_zone_trans z1 z2 z3 :
-  zbetween_zone z1 z2 ->
-  zbetween_zone z2 z3 ->
-  zbetween_zone z1 z3.
-Proof. by rewrite /zbetween_zone !zify; lia. Qed.
 
+Lemma disjoint_symbolic_slice_sym se s1 s2 :
+  disjoint_symbolic_slice se s1 s2 ->
+  disjoint_symbolic_slice se s2 s1.
+Proof.
+  move=> hdisj cs1 cs2 ok_cs1 ok_cs2.
+  rewrite disjoint_concrete_slice_sym.
+  by apply hdisj.
+Qed.
+*)
+
+(*
 (* On the model of [between_byte]. *)
 Lemma zbetween_zone_byte z1 z2 i :
   zbetween_zone z1 z2 ->
@@ -541,6 +636,7 @@ Proof.
 Qed.
 *)
 
+(*
 Lemma symbolic_slice_beq_sym s1 s2 :
   symbolic_slice_beq s1 s2 = symbolic_slice_beq s2 s1.
 Proof.
@@ -557,6 +653,7 @@ Proof.
   case: symbolic_slice_ble => // b2.
   by case: b1 b2 => [] [].
 Qed.
+*)
 (*
 Lemma disjoint_zones_incl z1 z1' z2 z2' :
   zbetween_zone z1 z1' ->
@@ -601,6 +698,113 @@ Qed.
 Lemma disj_sub_regions_sym sr1 sr2 : disj_sub_regions sr1 sr2 = disj_sub_regions sr2 sr1.
 Proof. by rewrite /disj_sub_regions /region_same eq_sym disjoint_zones_sym. Qed.
 *)
+
+(* Lemmas about sem_zone *)
+(* -------------------------------------------------------------------------- *)
+
+Lemma sem_zone_aux_app se cs z1 cs1 z2 :
+  sem_zone_aux se cs z1 = ok cs1 ->
+  sem_zone_aux se cs (z1 ++ z2) = sem_zone_aux se cs1 z2.
+Proof.
+  elim: z1 cs => [|s1 z1 ih1] cs /=.
+  + by move=> [<-].
+  by t_xrbindP=> cs1' -> /= cs1'' -> /= /ih1.
+Qed.
+
+Lemma sem_zone_app se z1 z2 cs1 :
+  sem_zone se z1 = ok cs1 ->
+  sem_zone se (z1 ++ z2) = sem_zone_aux se cs1 z2.
+Proof.
+  case: z1 => [//|s1 z1] /=.
+  t_xrbindP=> cs -> /=.
+  by apply sem_zone_aux_app.
+Qed.
+
+Lemma sub_concrete_slice_assoc cs1 cs2 cs3 cs4 cs5 :
+  sub_concrete_slice cs1 cs2 = ok cs3 ->
+  sub_concrete_slice cs3 cs4 = ok cs5 ->
+  exists2 cs,
+    sub_concrete_slice cs2 cs4 = ok cs &
+    sub_concrete_slice cs1 cs = ok cs5.
+Proof.
+  rewrite /sub_concrete_slice.
+  case: ifP => // hle1 [<-] /=.
+  case: ifP => // hle2 [<-] /=.
+  eexists; first by reflexivity.
+  move=> /=; case: ifPn; last first.
+  + move: hle1 hle2; rewrite !zify.
+    by lia.
+  by move=> _; rewrite Z.add_assoc.
+Qed.
+
+Lemma sem_zone_aux_sub_concrete_slice se z cs1 cs1' cs cs2 :
+  sem_zone_aux se cs1 z = ok cs1' ->
+  sub_concrete_slice cs cs2 = ok cs1 ->
+  exists2 cs2',
+    sem_zone_aux se cs2 z = ok cs2' &
+    sub_concrete_slice cs cs2' = ok cs1'.
+Proof.
+  elim: z cs1 cs2 => [|s z ih] cs1 cs2 /=.
+  + move=> [<-] ok_cs1.
+    by eexists; first by reflexivity.
+  t_xrbindP=> ? -> /= cs1'' ok_cs1'' ok_cs1' ok_cs1.
+  have [? -> /= hsub] := sub_concrete_slice_assoc ok_cs1 ok_cs1''.
+  by apply: ih hsub.
+Qed.
+
+Lemma sem_zone_aux_incl se z cs1 cs2 :
+  sem_zone_aux se cs1 z = ok cs2 ->
+  zbetween_concrete_slice cs1 cs2.
+Proof.
+  elim: z cs1 => [|s z ih] cs1 /=.
+  + by move=> [<-]; apply zbetween_concrete_slice_refl.
+  t_xrbindP=> cs ok_cs cs1' ok_cs1' ok_cs2.
+  apply (zbetween_concrete_slice_trans (sub_concrete_slice_incl ok_cs1')).
+  by apply (ih _ ok_cs2).
+Qed.
+
+Lemma sem_zone_cons_incl se s z cs :
+  sem_zone se (s::z) = ok cs ->
+  exists2 cs',
+    sem_slice se s = ok cs' & zbetween_concrete_slice cs' cs.
+Proof.
+  move=> /=.
+  t_xrbindP=> ? -> /= ok_cs.
+  eexists; first by reflexivity.
+  by apply (sem_zone_aux_incl ok_cs).
+Qed.
+
+Lemma sem_zone_aux_app_inv se cs z1 z2 cs2 :
+  sem_zone_aux se cs (z1 ++ z2) = ok cs2 ->
+  exists2 cs1,
+    sem_zone_aux se cs z1 = ok cs1 &
+    sem_zone_aux se cs1 z2 = ok cs2.
+Proof.
+  elim: z1 cs => [|s1 z1 ih1] cs /=.
+  + by move=> ?; eexists; first by reflexivity.
+  t_xrbindP=> ? -> /= ? -> /= ok_cs2.
+  by apply ih1.
+Qed.
+
+Lemma sem_zone_app_inv se z1 z2 cs :
+  z1 <> [::] -> z2 <> [::] ->
+  sem_zone se (z1 ++ z2) = ok cs ->
+  exists cs1 cs2, [/\
+    sem_zone se z1 = ok cs1,
+    sem_zone se z2 = ok cs2 &
+    sub_concrete_slice cs1 cs2 = ok cs].
+Proof.
+  case: z1 => [//|s1 z1] _ /=.
+  move=> z2_nnil.
+  t_xrbindP=> cs1 -> /= ok_cs.
+  have [{}cs1 -> /= {}ok_cs] := sem_zone_aux_app_inv ok_cs.
+  case: z2 z2_nnil ok_cs => [//|s2 z2] _ /=.
+  t_xrbindP=> cs2 -> /= cs2' ok_cs2' ok_cs2.
+  have [{}cs2' {}ok_cs2' {}ok_cs2] :=
+    sem_zone_aux_sub_concrete_slice ok_cs2 ok_cs2'.
+  by exists cs1, cs2'.
+Qed.
+
 (* Lemmas about wf_zone *)
 (* -------------------------------------------------------------------------- *)
 (*
@@ -669,34 +873,216 @@ Proof.
   by move /size_of_le : hsub; lia.
 Qed.
 
-(*
-Lemma sub_region_at_ofs_wf se sr ty ofs ty2 :
-  wf_sub_region se sr ty ->
-  size_of ty2 <= size_of ty ->
-  wf_sub_region se (sub_region_at_ofs sr ofs (size_of ty2)) ty2.
+(* TODO: clean ? *)
+Lemma split_lastP z z' s :
+  z <> [::] ->
+  split_last z = (z', s) ->
+  z = z' ++ [:: s].
 Proof.
-  move=> [hwf1 hwf2] hle; split=> //.
-  move=> cs /=.
-  rewrite /sub_zone_at_ofs.
-  case hsplit: (split_last sr.(sr_zone)) => [z s].
-  case: andP.
-  - move=> [h1 h2].
-    move=> /hwf2.
-    admit.
-  - move=> _.
-    case: is_const; case: is_const; case: is_const.
-    rewrite /wf_concrete_slice
-  case hofs: eq_expr => /=.
-  case: eq_expr
-  case: (sr_zone sr) => /=.
-  case: ofs hofs => [ofs|_] /=; last by apply hwf.
-  move=> /(_ _ refl_equal) ?.
-  split=> /=; first by auto with zarith.
-  have hlen := hwf.(wfz_len).
-  have hofs := hwf.(wfz_ofs).
-  by lia.
+  elim: z z' => [//|s1 z1 ih1] z' _.
+  case: z1 ih1 => [|s1' z1] ih1.
+  + simpl. move=> [<- <-]. reflexivity.
+  simpl. rewrite -/(split_last (_::_)).
+  case h: split_last => [k1 k2].
+  move=> [??]; subst z' s.
+  have := ih1 _ ltac:(discriminate) h.
+  simpl. move=> <-. done.
 Qed.
 
+Lemma sub_region_concat_wf se z ty sl ty2 ofs pofs :
+  wf_zone se z ty sl ->
+  sem_pexpr true [::] se ofs >>= to_int = ok pofs ->
+  0 <= pofs /\ pofs + size_of ty2 <= size_of ty ->
+  wf_zone se (z ++ [:: {| ss_ofs := ofs; ss_len := size_of ty2 |}]) ty2 sl.
+Proof.
+  move=> hwf ok_pofs hofs.
+  have [cs ok_cs wf_cs] := hwf.
+  exists {| cs_ofs := cs_ofs cs + pofs; cs_len := size_of ty2 |}.
+  rewrite (sem_zone_app _ ok_cs).
+  simpl. rewrite /sem_slice /=. rewrite ok_pofs /=.
+  rewrite /sub_concrete_slice /=.
+  case: ifPn => //.
+  move: hofs; rewrite !zify.
+  have := wf_cs.(wfcs_len). lia.
+  split=> //=.
+    apply Z.le_refl.
+    have := wf_cs.(wfcs_len). have := wf_cs.(wfcs_ofs). lia.
+Qed.
+
+
+
+(* We manage to prove that, maybe this is a better formulation then! *)
+Lemma sem_zone'_app se z1 z2 cs :
+  z1 <> [::] -> z2 <> [::] ->
+  sem_zone se (z1 ++ z2) = ok cs ->
+  exists cs1 cs2, [/\
+    sem_zone se z1 = ok cs1,
+    sem_zone se z2 = ok cs2 &
+    sub_concrete_slice cs1 cs2 = ok cs].
+Proof.
+  move=> + z2_nnil.
+  elim: z1 cs => [//|s1 z1 ih1] cs /= _.
+  t_xrbindP=> cs1 ok_cs1.
+  case: z1 ih1 => [|s1' z1] ih1 /=.
+  + move=> ok_cs.
+    exists cs1. rewrite ok_cs1 /=.
+    case: z2 z2_nnil ok_cs {ih1} => [//|s2 z2] _ /=.
+    t_xrbindP=> cs2 ok_cs2 cs' ok_cs' ok_cs.
+    rewrite ok_cs2 /=.
+    have hle: cs'.(cs_len) <=? cs2.(cs_len).
+    + move: ok_cs'; rewrite /sub_concrete_slice.
+      case: ifP => // _ [<-] /=.
+      rewrite zify. lia.
+    have := sem_zone'_auxP ok_cs hle.
+    move=> [cs5 ok_cs5 eq_cs5].
+    rewrite ok_cs5.
+    exists cs5; split=> //.
+    rewrite eq_cs5.
+    move: ok_cs' ok_cs.
+    rewrite {1}/sub_concrete_slice /=.
+    case: ifP => // hle1 [<-] /= ok_cs.
+    rewrite /sub_concrete_slice /=.
+    case: ifPn => // hle2.
+    ring_simplify (cs_ofs cs1 + (cs_ofs cs + cs_ofs cs2 - (cs_ofs cs1 + cs_ofs cs2))).
+    case: (z2) ok_cs => /=. move=> [<-] /=. done.
+    by case: (cs).
+    case/negP:hle2. move: hle1. rewrite !zify.
+    ring_simplify (cs_ofs cs + cs_ofs cs2 - (cs_ofs cs1 + cs_ofs cs2)).
+    have /= := sem_zone'_aux_test ok_cs.
+    rewrite !zify. split. lia.
+    case: (z2) ok_cs. move=> /= [<-] /=. lia.
+    lia.
+  t_xrbindP=> cs3 ok_cs3 cs4 ok_cs4 ok_cs.
+  rewrite ok_cs1 ok_cs3 /= ok_cs4 /=.
+  have: exists2 cs5, sem_zone se ((s1' :: z1) ++ z2) = ok cs5 &
+        cs5 = {| cs_ofs := cs_ofs cs + cs_ofs cs3 - cs_ofs cs4; cs_len := cs_len cs |}.
+  + rewrite /= ok_cs3 /=.
+    have hle: cs_len cs4 <=? cs_len cs3.
+    + move: ok_cs4.
+      rewrite /sub_concrete_slice; case: ifP=> // _ [<-] /=.
+      rewrite zify. lia.
+    have := sem_zone'_auxP ok_cs hle.
+    have: match z1 ++ z2 with
+               | [::] => cs_len cs3
+               | _ :: _ => cs_len cs
+               end = cs_len cs.
+    + case: (z1 ++ z2) ok_cs ok_cs4. move=> /= [->].
+      rewrite /sub_concrete_slice. case: ifP => // _ [<-]. done.
+      done.
+    move=> ->. done.
+  move=> [cs5 ok_cs5 eq_cs5].
+  have := ih1 _ ltac:(discriminate) ok_cs5.
+  move=> [cs6 [cs7 [h1 h2 h3]]].
+  rewrite h2.
+  move: h1 => /=.
+  rewrite ok_cs3 /= => h1.
+  have hle2: cs_len cs3 <=? cs_len cs4.
+  + move: ok_cs4.
+    rewrite /sub_concrete_slice; case: ifP=> // _ [<-] /=.
+    rewrite zify. lia.
+  have := sem_zone'_auxP h1 hle2.
+  move=> [cs8 ok_cs8 eq_cs8]. rewrite ok_cs8.
+  exists cs8, cs7. split=> //.
+  move: h3.
+  rewrite eq_cs5 eq_cs8.
+  rewrite /sub_concrete_slice /=.
+  have -> : match z1 with
+                                 | [::] => cs_len cs4
+                                 | _ :: _ => cs_len cs6
+                                 end = cs_len cs6.
+  + case: (z1) h1 ok_cs4.
+    move=> /= [<-]. rewrite /sub_concrete_slice.
+    case: ifP => // _ [<-]. done.
+    done.
+  case: ifP => // _. move=> [].
+  case: (cs) => [ofs len] /=. move=> ??. f_equal. f_equal. lia. lia.
+Qed.
+
+(* FIXME: clean *)
+Lemma sub_region_at_ofs_wf se sr ty ofs ty2 pofs :
+  wf_sub_region se sr ty ->
+  sem_pexpr true [::] se ofs >>= to_int = ok pofs ->
+  0 <= pofs /\ pofs + size_of ty2 <= size_of ty ->
+  wf_sub_region se (sub_region_at_ofs sr ofs (size_of ty2)) ty2.
+Proof.
+  move=> [hwf1 hwf2] ok_pofs hofs; split=> //.
+  have [cs ok_cs wf_cs] := hwf2.
+  rewrite /=.
+  rewrite /sub_zone_at_ofs.
+  case heq: split_last => [z' s].
+  have T: sr.(sr_zone) <> [::].
+  + move=> hh. rewrite hh in ok_cs. done.
+  have := split_lastP T heq.
+  have ? := sub_region_concat_wf hwf2 ok_pofs hofs.
+  case hi: is_const => [sofs|//].
+  case hj: is_const => [slen|//].
+  case hl: is_const => [pofs'|//].
+  rewrite /=.
+  move=> h.
+  move: ok_cs. rewrite h.
+  have: z' = [::] \/ z' <> [::].
+  + by case: (z'); [left|right].
+  move=> [] hz'.
+  + subst z'.
+    simpl.
+    rewrite /sem_slice.
+    have := is_constP (ss_ofs s). rewrite hi.
+    move=> /is_reflect_some_inv -> /=.
+    have := is_constP (ss_len s). rewrite hj.
+    move=> /is_reflect_some_inv -> /=.
+    move=> [?]; subst cs.
+    eexists. simpl. reflexivity.
+    split=> /=. apply Z.le_refl.
+    have /= := wf_cs.(wfcs_ofs).
+    move: ok_pofs hofs.
+    have := is_constP ofs. rewrite hl.
+    move=> /is_reflect_some_inv -> /=.
+    move=> [->].
+    have /= := wf_cs.(wfcs_len). lia.
+  move=> hh.
+  have := sem_zone'_app _ _ hh. move=> /(_ ltac:(done) ltac:(done)).
+  move=> [cs1 [cs2 [ok_cs1 ok_cs2 ok_cs]]].
+  have /= := sem_zone_app [::{| ss_ofs := sofs + pofs'; ss_len := size_of ty2 |}] ok_cs1.
+  rewrite /sub_concrete_slice /=.
+  case: ifPn.
+  + move=> _ /=. rewrite Z.add_assoc => H.
+    eexists; first by apply H.
+    split=> /=.
+    + apply Z.le_refl.
+    move: ok_cs2. rewrite /= /sem_slice.
+    have := is_constP (ss_ofs s). rewrite hi.
+    move=> /is_reflect_some_inv -> /=.
+    have := is_constP (ss_len s). rewrite hj.
+    move=> /is_reflect_some_inv -> /=.
+    move=> [?]; subst cs2.
+    have /= := wf_cs.(wfcs_ofs).
+    move: ok_pofs hofs.
+    have := is_constP ofs. rewrite hl.
+    move=> /is_reflect_some_inv -> /=.
+    move=> [->].
+    have /= := wf_cs.(wfcs_len).
+    move: ok_cs. rewrite /sub_concrete_slice /=.
+    case: ifP => // + [<-] /=. lia.
+  rewrite !zify => hk. exfalso.
+  move: hk.
+  move: ok_cs2. rewrite /= /sem_slice.
+    have := is_constP (ss_ofs s). rewrite hi.
+    move=> /is_reflect_some_inv -> /=.
+    have := is_constP (ss_len s). rewrite hj.
+    move=> /is_reflect_some_inv -> /=.
+    move=> [?]; subst cs2.
+    have /= := wf_cs.(wfcs_ofs).
+    move: ok_pofs hofs.
+    have := is_constP ofs. rewrite hl.
+    move=> /is_reflect_some_inv -> /=.
+    move=> [->].
+    have /= := wf_cs.(wfcs_len).
+    move: ok_cs. rewrite /sub_concrete_slice /=.
+    case: ifP => // + [<-] /=.
+    rewrite !zify. lia.
+Qed.
+
+(*
 Lemma sub_region_at_ofs_0_wf sr ty :
   wf_sub_region sr ty ->
   wf_sub_region (sub_region_at_ofs sr (Some 0) (size_of ty)) ty.
@@ -985,19 +1371,26 @@ Section EXPR.
   Qed.
 
   (* TODO: try other sem_zone formulation to check which one is easier to reason with *)
+  (* FIXME: clean *)
   Lemma divide_zoneP z ws cs :
     divide_zone z ws ->
     sem_zone se z = ok cs ->
     cs.(cs_ofs) mod wsize_size ws = 0.
   Proof.
-    elim: z cs => //= sli1 z ih cs /andP [hdiv1 hdiv2].
-    case: z ih hdiv2 => /=.
-    + by move=> _ _; apply divideP_slice.
-    move=> sli2 z ih hdiv2.
-    t_xrbindP=> cs1 /(divideP_slice hdiv1) {}hdiv1 cs2 /(ih _ hdiv2) {}hdiv2.
-    rewrite /sub_concrete_slice; case: ifP => // _ [<-] /=.
+    case: z => [//|sli1 z] /= /andP [hdiv1 hdiv2].
+    t_xrbindP=> cs1 /(divideP_slice hdiv1).
+    elim: z cs1 hdiv2 => [|sli2 z ih] cs1.
+    + by move=> _ ? [<-].
+    simpl.
+    move=> /andP [hdiv2 hdiv3] h.
+    t_xrbindP=> cs2 ok_cs2 cs3 ok_cs3 ok_cs.
+    have := ih _ hdiv3 _ ok_cs.
+    apply.
+    move: ok_cs3; rewrite /sub_concrete_slice; case: ifP => // _ [<-] /=.
     rewrite Zplus_mod.
-    by rewrite hdiv1 hdiv2.
+    rewrite h.
+    have -> := divideP_slice hdiv2 ok_cs2.
+    done.
   Qed.
 
   Lemma check_alignP x sr ty w al ws tt :
@@ -1685,21 +2078,6 @@ Proof.
   by lia.
 Qed.
 
-Lemma sem_zone_cons_incl se s z cs :
-  sem_zone se (s::z) = ok cs ->
-  exists2 cs',
-    sem_slice se s = ok cs' &
-    forall off,
-      offset_in_concrete_slice cs off ->
-      offset_in_concrete_slice cs' off.
-Proof.
-  case: z => [|s' z] /=.
-  + move=> ->.
-    by eexists; first by reflexivity.
-  t_xrbindP=> cs1 ok_cs1 cs2 _ ok_cs.
-  exists cs1 => //.
-  by move=> off; apply (sub_concrete_slice_incl ok_cs).
-Qed.
 
 Lemma valid_offset_clear_status se status z off :
   valid_offset se (odflt Unknown (clear_status status z)) off ->
@@ -1723,45 +2101,62 @@ Proof.
   by apply (add_sub_interval_1 hadd off_valid ok_cs').
 Qed.
 
-Definition disjoint_concrete_slice cs1 cs2 :=
-  (cs1.(cs_ofs) + cs1.(cs_len) <=? cs2.(cs_ofs)) ||
-  (cs2.(cs_ofs) + cs2.(cs_len) <=? cs1.(cs_ofs)).
-
-Lemma disjoint_concrete_sliceP cs1 cs2 off :
-  disjoint_concrete_slice cs1 cs2 ->
-  offset_in_concrete_slice cs1 off ->
-  offset_in_concrete_slice cs2 off ->
-  False.
+(* this is the form that we need it seems *)
+Lemma sem_zone'_auxP_simpl se cs1 cs2 z cs :
+  sem_zone_aux se cs1 z = ok cs ->
+  cs1.(cs_len) = cs2.(cs_len) ->
+  exists2 cs',
+    sem_zone_aux se cs2 z = ok cs' &
+    cs' = {| cs_ofs := cs.(cs_ofs) + cs2.(cs_ofs) - cs1.(cs_ofs); cs_len := cs.(cs_len) |}.
 Proof.
-  rewrite /disjoint_concrete_slice /offset_in_concrete_slice !zify.
-  by lia.
+  elim: z cs1 cs cs2 => [|s z ih] /= cs1 cs cs2.
+  + move=> [<-] ->. exists cs2. done. ring_simplify (cs_ofs cs1 + cs_ofs cs2 - cs_ofs cs1). by case: cs2.
+  t_xrbindP=> cs0 ok_cs0 cs3 ok_cs3 ok_cs hle.
+  rewrite ok_cs0 /=.
+  have: exists cs4, sub_concrete_slice cs2 cs0 = ok cs4.
+  + move: ok_cs3 hle.
+    rewrite /sub_concrete_slice.
+    case: ifP => // + [?].
+    case: ifPn.
+    + eexists; reflexivity. rewrite /= !zify. lia.
+  move=> [cs4 ok_cs4].
+  rewrite ok_cs4 /=.
+  have: cs3.(cs_len) = cs4.(cs_len).
+  + move: ok_cs3 ok_cs4.
+    rewrite /sub_concrete_slice.
+    case: ifP => // _ [<-].
+    case: ifP => // _ [<-]. simpl. done.
+  move=> hle'.
+  have := ih _ _ cs4 ok_cs hle'. move=> [cs5 ok_cs5 eq_cs5].
+  exists cs5 => //.
+  rewrite eq_cs5.
+  move: ok_cs4 ok_cs3 ok_cs; rewrite /sub_concrete_slice.
+  case: ifP => // _ [<-].
+  case: ifP => // _ [<-]. move=> /=.
+  ring_simplify (cs_ofs cs + (cs_ofs cs2 + cs_ofs cs0) - (cs_ofs cs1 + cs_ofs cs0)).
+  case: (z) => /=. move=> [<-] /=. done.
+  done.
 Qed.
 
-Definition disjoint_symbolic_slice se s1 s2 :=
-  forall cs1 cs2,
-  sem_slice se s1 = ok cs1 ->
-  sem_slice se s2 = ok cs2 ->
-  disjoint_concrete_slice cs1 cs2.
 
-Definition disjoint_symbolic_zone se z1 z2 :=
-  forall cs1 cs2,
-  sem_zone se z1 = ok cs1 ->
-  sem_zone se z2 = ok cs2 ->
-  disjoint_concrete_slice cs1 cs2.
 
-Lemma disjoint_concrete_slice_sym cs1 cs2 :
-  disjoint_concrete_slice cs1 cs2 = disjoint_concrete_slice cs2 cs1.
-Proof. by rewrite /disjoint_concrete_slice orbC. Qed.
+(* this is the form that we need it seems *)
+(* FIXME: clean *)
 
-Lemma disjoint_symbolic_slice_sym se s1 s2 :
-  disjoint_symbolic_slice se s1 s2 ->
-  disjoint_symbolic_slice se s2 s1.
+Lemma sem_zone_aux_ds se cs1 z cs2 :
+  z <> [::] ->
+  sem_zone_aux se cs1 z = ok cs2 ->
+  exists2 cs,
+    sem_zone se z = ok cs &
+    sub_concrete_slice cs1 cs = ok cs2.
 Proof.
-  move=> hdisj cs1 cs2 ok_cs1 ok_cs2.
-  rewrite disjoint_concrete_slice_sym.
-  by apply hdisj.
+  case: z => //= s z _.
+  t_xrbindP=> cs -> cs3 ok_cs3 ok_cs2 /=.
+  have := sem_zone'_auxP_simpl2 ok_cs2 ok_cs3. done.
 Qed.
 
+(* FIXME: clean *)
+(* + prove sub_concrete_slice -> incl *)
 Lemma disjoint_symbolic_zone_cons se s z1 z2 :
   z1 <> [::] -> z2 <> [::] ->
   disjoint_symbolic_zone se z1 z2 ->
@@ -1770,13 +2165,20 @@ Proof.
   case: z1 => // s1 z1 _.
   case: z2 => // s2 z2 _.
   move=> hdisj cs1 cs2 /=.
-  rewrite /sub_concrete_slice.
-  t_xrbindP=> cs -> cs1' ok_cs1' ok_cs1 _ [<-] cs2' ok_cs2' ok_cs2.
-  case: ifP ok_cs1 => // + [<-].
-  case: ifP ok_cs2 => // + [<-].
-  have := hdisj _ _ ok_cs1' ok_cs2'.
-  rewrite /disjoint_concrete_slice /= !zify.
-  by lia.
+  t_xrbindP=> cs -> /= cs1' ok_cs1' cs1'' ok_cs1'' ok_cs1 _ [<-] cs2' ok_cs2' cs2'' ok_cs2'' ok_cs2.
+  
+  move: hdisj; rewrite /disjoint_symbolic_zone.
+  simpl. rewrite ok_cs1' ok_cs2' /=.
+  have := sem_zone'_auxP_simpl2 ok_cs1 ok_cs1''.
+  move=> [cs5 ok_cs51 ok_cs52].
+  have := sem_zone'_auxP_simpl2 ok_cs2 ok_cs2''.
+  move=> [cs6 ok_cs61 ok_cs62].
+  move=> /(_ _ _ ok_cs51 ok_cs61).
+  move: ok_cs52 ok_cs62.
+  rewrite /sub_concrete_slice /disjoint_concrete_slice.
+  case: ifP => // + [<-].
+  case: ifP => // + + [<-] /=.
+  rewrite !zify. lia.
 Qed.
 
 (* under-specification *)
@@ -1803,11 +2205,11 @@ Proof.
   move=> hdisj cs1 cs2 /=.
   case: z1 => [|s1' z1].
   + case: z2 => [|s2' z2].
-    + move=> ok_cs1 ok_cs2.
+    + rewrite /= !LetK => ok_cs1 ok_cs2.
       by apply hdisj.
-    rewrite /= /sub_concrete_slice.
-    t_xrbindP=> ok_cs1 cs2' ok_cs2' cs2'' ok_cs2'' ok_cs2.
-    case: ifP ok_cs2 => // + [<-].
+    rewrite /= LetK /sub_concrete_slice.
+    t_xrbindP=> ok_cs1 cs2' ok_cs2' cs2'' ok_cs2'' cs2''' ok_cs2''' ok_cs2.
+    case: ifP ok_cs2''' ok_cs2 => // + [<-].
     have := hdisj _ _ ok_cs1 ok_cs2'.
     rewrite /disjoint_concrete_slice /= !zify.
     by lia.
@@ -3529,9 +3931,75 @@ Lemma alloc_array_moveP se m0 s1 s2 s1' table1 rmap1 table2 rmap2 r tag e v v' n
   alloc_array_move saparams fresh_var_ident string_of_sr pmap table1 rmap1 r tag e = ok (table2, rmap2, i2) →
   ∃ s2' : estate, sem_i P' rip s2 i2 s2' ∧ valid_state se rmap2 m0 s1' s2'.
 Proof.
-  move=> hvs he /truncate_val_typeE[] a' ?? hw; subst v v'.
+  move=> hvs he /truncate_val_typeE[] a ?? hw; subst v v'.
   rewrite /alloc_array_move.
-  t_xrbindP=> -[x ofsx] hgetr [y ofsy] hgete.
+  t_xrbindP=> -[[[[[table1' sry] statusy] mk] ey] ofsy] He.
+
+  have: wf_sub_region se sry (sarr n).
+  + case: e he He => //=.
+    + t_xrbindP=> y hgety vpky hkindy.
+      case: vpky hkindy => [vpky|//] hkindy.
+      t_xrbindP=> -[sry' statusy'] /(get_gsub_region_statusP hkindy) hgvalidy.
+      assert (hwfy := check_gvalid_wf wfr_wf hgvalidy).
+      t_xrbindP=> _ _ _ <- _ _ _ _.
+      rewrite -(type_of_get_gvar_array hgety).
+      done.
+    move=> aa ws len y e.
+    apply: on_arr_gvarP.
+    move=> n' a' hyty hgety.
+    apply: rbindP=> i ok_i.
+    apply: rbindP=> a'' ok_a'' /ok_inj /Varr_inj [?]; subst n => /= ?; subst a''.
+    t_xrbindP=> vpky hkindy.
+    case: vpky hkindy => [vpky|//] hkindy.
+    t_xrbindP=> -[sry' statusy'] /(get_gsub_region_statusP hkindy) hgvalidy.
+    t_xrbindP=> -[??] _.
+    rewrite /sub_region_status_at_ofs.
+    case: andP.
+    + move=> heq.
+      t_xrbindP=> ? _ _ <- _ _ _ _.
+      assert (hwfy := check_gvalid_wf wfr_wf hgvalidy).
+      have /= := [elaborate eq_exprP true [::] s1 (proj2 heq)].
+      move=> [hj]; move: hwfy.
+      move: hj.
+      rewrite hyty /=.
+      move=> ->.
+      rewrite Pos2Z.id. done.
+    move=> _.
+    t_xrbindP=> _ _ _ <- _ _ _ _.
+    sub_region_at_ofs_wf
+      size_slot_gt0
+      have hb := WArray.get_sub_bound ok_a''.
+      apply: wf_sub_region_subtype hwfy.
+      rewrite hyty /=.
+    case h: sub_region_status_at_ofs => [??].
+    t_xrbindP. => _ _ 
+    Search (Varr _ = Varr _).
+    t_xrbindP. i vi ok_vi ok_i a'' ok_a'' eqlen
+      he
+      done.
+      t_xrbindP=> -[ei ofsi]. move=> /addr_from_vpk_pexprP.
+
+  case: r hw => //.
+  + move=> x /write_varP [-> hdb htrunc].
+    have /vm_truncate_valE [hty htreq]:= htrunc.
+    case hlx: (get_local pmap x) => [pk|//].
+    have /wf_locals hlocal := hlx.
+
+    case: pk hlx hlocal.
+    + t_xrbindP=> s ofs ws cs sc hlx hlocal heqsub _ <- <-.
+      exists s2; split; first by constructor.
+      (* valid_state update *)
+      apply: (valid_state_set_move hvs hwf hlx _ htrunc) => //.
+      by rewrite htreq.
+  
+  
+  
+  
+  
+  
+  
+  
+   => -[x ofsx] hgetr [y ofsy] hgete.
   case hkindy: (get_var_kind pmap y) => [vk|] //.
   case hofsy: (match ofsy with
                | Some p => p
