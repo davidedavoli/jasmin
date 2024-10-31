@@ -668,7 +668,11 @@ Record table := {
        We reuse [pexpr] for the type of symbolic expressions, because it is
        convenient. We ensure that the variables appearing in the symbolic
        expressions are disjoint from those appearing in the program.
-       We use [vars] for that (see below). *)
+       We use [vars] for that (see below).
+       A variable whose value is not known can be removed from the map.
+       (For instance, after a [Pif] where a variable is assigned two
+       different values in the then- and else-branches, we remove that variable
+       from the map). *)
   counter : Uint63.int;
     (* the counter is used to ensure we generate fresh variables *)
   vars : Sv.t;
@@ -681,7 +685,7 @@ Context (clone : var_i -> int -> var_i).
 
 (* Add a mapping inside a table, but checks before that the program variable is
    not fresh. *)
-Definition table_set_var t (x:var_i) e :=
+Definition table_set_var t x e :=
   if Sv.mem x t.(vars) then None
   else
     Some {|
