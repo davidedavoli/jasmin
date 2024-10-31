@@ -1606,7 +1606,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
           else
           foldl (fun table lv => update_table table lv (Parr_init 1%positive)) table rs
         | _, _, _ =>
-          (* FIXME: this is a bit hacky *)
+          (* FIXME: this is a bit hacky, should probably be replace by a remove_binding *)
           foldl (fun table lv => update_table table lv (Parr_init 1%positive)) table rs
         end
       in

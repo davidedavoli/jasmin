@@ -1874,36 +1874,36 @@ End SYMBOLIC_OF_PEXPR_VARS.
 
 Section SYMBOLIC_OF_PEXPR_SEM.
 
-Context (vm : Vm.t).
+Context (s : estate).
 
 Let X e :=
   forall table table' e' se,
     symbolic_of_pexpr table e = Some (table', e') ->
     wft_VARS table ->
-    wft_SEM table se vm ->
+    wft_SEM table se s.(evm) ->
     exists se', [/\
-      wft_SEM table' se' vm,
+      wft_SEM table' se' s.(evm),
       forall e v,
         Sv.Subset (read_e e) table.(vars) ->
         sem_pexpr true [::] se e = ok v ->
         sem_pexpr true [::] se' e = ok v &
-      forall gd s v,
-        sem_pexpr true gd (with_vm s vm) e = ok v ->
+      forall gd v,
+        sem_pexpr true gd s e = ok v ->
         sem_pexpr true [::] se' e' = ok v].
 
 Let Y es :=
   forall table table' es' se,
     fmapo symbolic_of_pexpr table es = Some (table', es') ->
     wft_VARS table ->
-    wft_SEM table se vm ->
+    wft_SEM table se s.(evm) ->
     exists se', [/\
-      wft_SEM table' se' vm,
+      wft_SEM table' se' s.(evm),
       forall e v,
         Sv.Subset (read_e e) table.(vars) ->
         sem_pexpr true [::] se e = ok v ->
         sem_pexpr true [::] se' e = ok v &
-      forall gd s vs,
-        sem_pexprs true gd (with_vm s vm) es = ok vs ->
+      forall gd vs,
+        sem_pexprs true gd s es = ok vs ->
         sem_pexprs true [::] se' es' = ok vs].
 
 Lemma wft_SEM_symbolic_of_pexpr_e_es : (forall e, X e) /\ (forall es, Y es).
@@ -1924,7 +1924,7 @@ Proof.
       + have := symbolic_of_pexpr_subset_vars hsyme hvars.
         by clear -hsub; SvD.fsetdec.
       by have ok_vy2 := hsemle2 _ _ hsub1 ok_vy1.
-    t_xrbindP=> gd s vs v /hseme1 ok_v {}vs /hseme2 ok_vs <-.
+    t_xrbindP=> gd vs v /hseme1 ok_v {}vs /hseme2 ok_vs <-.
     have {}ok_v := hsemle2 _ _ (symbolic_of_pexpr_subset_read hsyme hvars) ok_v.
     by rewrite ok_v ok_vs.
   - move=> z table _ _ se [<- <-] _ hsem.
@@ -1937,14 +1937,14 @@ Proof.
     case hget: Mvar.get => [e|].
     + move=> [<- <-] _ hsem.
       exists se; split=> //.
-      move=> gd _ v.
+      move=> gd v.
       rewrite /get_gvar hlvar.
       by apply: hsem hget.
     rewrite /table_fresh_var.
     set x' := clone x.(gv) _.
     case: Sv_memP => // hnin.
     move=> [<- <-] hvars hsem.
-    exists (with_vm se se.(evm).[x' <- vm.[x.(gv)]]).
+    exists (with_vm se se.(evm).[x' <- s.(evm).[x.(gv)]]).
     split=> /=.
     + move=> y ey vy /=.
       rewrite Mvar.setP.
@@ -1967,7 +1967,7 @@ Proof.
       rewrite Vm.setP_neq //.
       apply /eqP => /=.
       by clear -hsub hin hnin; SvD.fsetdec.
-    move=> gd _ v.
+    move=> gd v.
     rewrite /get_gvar hlvar /= /get_var Vm.setP_eq.
     rewrite compat_val_vm_truncate_val //.
     by rewrite clone_ty; apply Vm.getP.
@@ -1975,7 +1975,7 @@ Proof.
     apply: obindP => -[{}table' {}e'] hsyme [<- <-] hvars hsem.
     have [se1 [hsem1 hsemle1 hseme1]] := he _ _ _ _ hsyme hvars hsem.
     exists se1; split=> //=.
-    by t_xrbindP=> gd s v ve /hseme1 -> /=.
+    by t_xrbindP=> gd v ve /hseme1 -> /=.
   - move=> op e1 he1 e2 he2 table table' e' se.
     apply: obindP => -[table1 e1'] hsyme1.
     apply: obindP => -[table2 e2'] hsyme2.
@@ -1990,7 +1990,7 @@ Proof.
       + have := symbolic_of_pexpr_subset_vars hsyme1 hvars.
         by clear -hsub; SvD.fsetdec.
       by have ok_vy2 := hsemle2 _ _ hsub1 ok_vy1.
-    t_xrbindP=> gd s v ve1 /hseme1 ok_ve1 ve2 /hseme2 ok_ve2.
+    t_xrbindP=> gd v ve1 /hseme1 ok_ve1 ve2 /hseme2 ok_ve2.
     have {}ok_ve1 :=
       hsemle2 _ _ (symbolic_of_pexpr_subset_read hsyme1 hvars) ok_ve1.
     by rewrite ok_ve1 ok_ve2 /=.
@@ -1999,7 +1999,7 @@ Proof.
     move=> [<- <-] hvars hsem.
     have [se1 [hsem1 hsemle1 hseme1]] := hes _ _ _ _ hsymes hvars hsem.
     exists se1; split=> //=.
-    t_xrbindP=> gd s v vs /hseme1 ok_vs.
+    t_xrbindP=> gd v vs /hseme1 ok_vs.
     by rewrite -/(sem_pexprs _ _ _ _) ok_vs /=.
   move=> ty b hb e1 he1 e2 he2 table table' e' se.
   apply: obindP => -[table1 b'] hsymb.
@@ -2022,7 +2022,7 @@ Proof.
     + have := symbolic_of_pexpr_subset_vars hsyme1 hvars1.
       by clear -hsub1; SvD.fsetdec.
     by have ok_v3 := hsemle3 _ _ hsub2 ok_v2.
-  t_xrbindP=> gd s v bb vb /hseme1 ok_vb ok_bb ve1' ve1 /hseme2 ok_ve1 ok_ve1'
+  t_xrbindP=> gd v bb vb /hseme1 ok_vb ok_bb ve1' ve1 /hseme2 ok_ve1 ok_ve1'
     ve2' ve2 /hseme3 ok_ve2 ok_ve2'.
   have hsub1 := symbolic_of_pexpr_subset_read hsymb hvars.
   have hsub2 : Sv.Subset (read_e b') (vars table2).
@@ -2039,13 +2039,13 @@ Definition wft_SEM_symbolic_of_pexpr := wft_SEM_symbolic_of_pexpr_e_es.1.
 
 End SYMBOLIC_OF_PEXPR_SEM.
 
-Lemma wf_table_symbolic_of_pexpr table table' e e' se vm :
+Lemma wf_table_symbolic_of_pexpr table table' e e' se s :
   symbolic_of_pexpr table e = Some (table', e') ->
-  wf_table table se vm ->
+  wf_table table se s.(evm) ->
   exists2 se',
-    wf_table table' se' vm &
-    forall gd s v,
-      sem_pexpr true gd (with_vm s vm) e = ok v ->
+    wf_table table' se' s.(evm) &
+    forall gd v,
+      sem_pexpr true gd s e = ok v ->
       sem_pexpr true [::] se' e' = ok v.
 Proof.
   move=> hsym [hvars hsem].
@@ -2065,7 +2065,7 @@ Proof.
   + move=> _ ? hwf _ /write_noneP [-> _ _]. exists se. done.
   + move=> x hwf hsem hw.
     case h: symbolic_of_pexpr => [[table' e']|].
-    + have [se1 hwf1] := wf_table_symbolic_of_pexpr h hwf.
+    + have [se1 hwf1 he1] := wf_table_symbolic_of_pexpr h hwf.
       exists (with_vm se1 (evm se1).[x <- v]).
       split.
       + move=> y ey /=.
@@ -2076,7 +2076,22 @@ Proof.
       move=> ? /= ??.
       rewrite Mvar.setP.
       case: eqP.
-      + move=> <- [<-] /=. move=> ?. admit.
+      + move=> <- [<-] /=.
+      have := he1 gd s1 v. rewrite with_vm_same. move=> /(_ hsem).
+      (* TODO: change Context vm into Context s inside the section above *)
+      move=> H.
+      have [_ _ ->] := write_get_varP_eq hw.
+      t_xrbindP=> _ <-.
+      rewrite vm_truncate_val_eq. rewrite -H.
+      apply eq_on_sem_pexpr. done. simpl.
+      move=> y hin. rewrite Vm.setP_neq //. apply /eqP.
+      (* we should probably check that x is not in vars or sth similar *)
+      (* both in update table and table_fresh_var *)
+      (* factorize both Mvar.set?? *)
+      (* this would give Mvar.get table.(bindings) x = Some _ -> x not in vars *)
+      
+        write_var get_var
+       move=> ?. admit.
       move=> _ hget okv.
       have [se' hsem'] := wft_SEM_symbolic_of_pexpr h hwf.(wft_vars) hwf.(wft_sem).
       have := hsem' _ _ _ hget. okv.
