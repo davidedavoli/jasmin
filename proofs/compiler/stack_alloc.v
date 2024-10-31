@@ -664,27 +664,49 @@ Definition get_gsub_region_status rmap (x:var_i) vpk :=
 
 Record table := {
   bindings : Mvar.t pexpr;
+    (* A symbolic expression can be associated to any program variable.
+       We reuse [pexpr] for the type of symbolic expressions, because it is
+       convenient. We ensure that the variables appearing in the symbolic
+       expressions are disjoint from those appearing in the program.
+       We use [vars] for that (see below). *)
   counter : Uint63.int;
+    (* the counter is used to ensure we generate fresh variables *)
   vars : Sv.t;
+    (* set of generated variables, to check that variables are really fresh *)
 }.
 
 Section CLONE.
 
 Context (clone : var_i -> int -> var_i).
 
+(* Add a mapping inside a table, but checks before that the program variable is
+   not fresh. *)
+Definition table_set_var t (x:var_i) e :=
+  if Sv.mem x t.(vars) then None
+  else
+    Some {|
+      bindings := Mvar.set t.(bindings) x e;
+      counter := t.(counter);
+      vars := t.(vars) |}.
+
+(* TODO: not fresh should maybe trigger an error? *)
 Definition table_fresh_var t x :=
   let x' := clone x t.(counter) in
   if Sv.mem x' t.(vars) then None (* variable not fresh *)
+  else if Mvar.get t.(bindings) x' is Some _ then None (* variable not fresh *)
   else
-    let e := Pvar (mk_lvar x') in
     let t :=
-      {| bindings := Mvar.set t.(bindings) x e;
+      {| bindings := t.(bindings);
          counter  := Uint63.succ t.(counter);
          vars := Sv.add x' t.(vars)
       |}
     in
-    Some (t, e).
+    let e := Pvar (mk_lvar x') in
+    let%opt table := table_set_var t x e in
+    Some (table, e).
 
+(* Reads variable [x] in the table, and returns the associated expression if
+   [x] is present, or generates a fresh binding if [x] is not present. *)
 Definition table_get_var t (x:var_i) :=
   match Mvar.get t.(bindings) x with
   | Some e => Some (t, e)
@@ -759,12 +781,17 @@ Definition update_table table lv e :=
   match lv with
   | Lvar x =>
     match symbolic_of_pexpr table e with
-    | None => remove_binding table x
+    | None => ok (remove_binding table x)
     | Some (table, e) =>
-      {| bindings := Mvar.set table.(bindings) x e;
-         counter := table.(counter);
-         vars := table.(vars) |}
+      o2r (stk_ierror_no_var "variable not fresh (update_table)")
+          (table_set_var table x e)
     end
+  | _ => ok table
+  end.
+
+Definition remove_binding_lval table lv :=
+  match lv with
+  | Lvar x => remove_binding table x
   | _ => table
   end.
 
@@ -1585,7 +1612,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
         Let: (table, rmap, ir) := add_iinfo ii (alloc_array_move_init table rmap r t e) in
         ok (table, rmap, [:: MkI ii ir])
       else
-        let table := update_table table r e in
+        Let table := update_table table r e in
         Let e := add_iinfo ii (alloc_e rmap e ty) in
         Let r := add_iinfo ii (alloc_lval rmap r ty) in
         ok (table, r.1, [:: MkI ii (Cassgn r.2 t ty e)])
@@ -1599,15 +1626,14 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
         Let rs := add_iinfo ii (alloc_array_swap rmap rs t e) in
         ok (table, rs.1, [:: MkI ii rs.2])
       else
-      let table :=
+      Let table :=
         match rs, o, e with
         | [:: x], Oasm op, [:: e] =>
           if is_move_op op then update_table table x e
           else
-          foldl (fun table lv => update_table table lv (Parr_init 1%positive)) table rs
+          ok (foldl (fun table r => remove_binding_lval table r) table rs)
         | _, _, _ =>
-          (* FIXME: this is a bit hacky, should probably be replace by a remove_binding *)
-          foldl (fun table lv => update_table table lv (Parr_init 1%positive)) table rs
+          ok (foldl (fun table r => remove_binding_lval table r) table rs)
         end
       in
       Let e  := add_iinfo ii (alloc_es rmap e (sopn_tin o)) in
