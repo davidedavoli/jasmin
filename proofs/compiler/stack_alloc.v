@@ -781,12 +781,16 @@ Definition remove_binding table x :=
      counter := table.(counter);
      vars := table.(vars) |}.
 
-Definition update_table table lv e :=
+Definition update_table table lv ty e :=
   match lv with
   | Lvar x =>
     match symbolic_of_pexpr table e with
     | None => ok (remove_binding table x)
     | Some (table, e) =>
+      Let _ :=
+        assert (x.(vtype) == ty)
+               (stk_ierror_basic x "invalid type for assignment (update_table)")
+      in
       o2r (stk_ierror_no_var "variable not fresh (update_table)")
           (table_set_var table x e)
     end
@@ -1616,7 +1620,7 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
         Let: (table, rmap, ir) := add_iinfo ii (alloc_array_move_init table rmap r t e) in
         ok (table, rmap, [:: MkI ii ir])
       else
-        Let table := update_table table r e in
+        Let table := update_table table r ty e in
         Let e := add_iinfo ii (alloc_e rmap e ty) in
         Let r := add_iinfo ii (alloc_lval rmap r ty) in
         ok (table, r.1, [:: MkI ii (Cassgn r.2 t ty e)])
@@ -1633,9 +1637,9 @@ Fixpoint alloc_i sao (trmap:table*region_map) (i: instr) : cexec (table * region
       Let table :=
         match rs, o, e with
         | [:: x], Oasm op, [:: e] =>
-          if is_move_op op then update_table table x e
+          if is_move_op op then update_table table x (head sbool (sopn_tout o)) e (* FIXME: sbool default value, should never happen *)
           else
-          ok (foldl (fun table r => remove_binding_lval table r) table rs)
+            ok (foldl (fun table r => remove_binding_lval table r) table rs)
         | _, _, _ =>
           ok (foldl (fun table r => remove_binding_lval table r) table rs)
         end
