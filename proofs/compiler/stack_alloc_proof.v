@@ -2060,19 +2060,25 @@ Proof.
   by exists se1.
 Qed.
 
-
-Lemma wf_table_set_var table se s1 e v (x:var_i) table' :
+(* warm-up, to remove at some point *)
+Lemma wf_table_set_var table se s1 e v ty v' r s1' table' :
   wf_table table se (evm s1) ->
   sem_pexpr true gd s1 e = ok v ->
-  x.(vtype) = type_of_val v -> (* for now I put this eq, is this the proper way? *)
-(*   write_l true gd r v s1 = ok s1' -> *)
-  update_table table (Lvar x) e = ok table' ->
+  truncate_val ty v = ok v' ->
+(*   x.(vtype) = type_of_val v -> (* for now I put this eq, is this the proper way? *) *)
+  write_lval true gd r v' s1 = ok s1' ->
+  update_table table r ty e = ok table' ->
   exists se',
-    wf_table table' se' (evm s1).[x <- v].
+    wf_table table' se' s1'.(evm).
 Proof.
-  move=> hwf hsem hty /=.
+  move=> hwf hsem htrunc hw.
+  rewrite /update_table.
   case hsym: symbolic_of_pexpr => [[table1 e1]|].
-  + move=> /o2rP.
+  case: r hw => /=.
+  + move=> _ _ /write_noneP [-> _ _] [<-].
+    by exists se.
+  + move=> x hw.
+    t_xrbindP=> /eqP hty /o2rP.
     rewrite /table_set_var.
     case: Sv_memP => // hnin.
     move=> [<-].
@@ -2086,12 +2092,24 @@ Proof.
         have := symbolic_of_pexpr_subset_read hsym hwf.(wft_vars). done.
       move=> ? /hwf1.(wft_vars). done.
     move=> y ey vy /=.
-    rewrite Mvar.setP. rewrite get_var_set; last first.
-    + rewrite hty. apply truncatable_type_of.
+    rewrite Mvar.setP.
+    have [_ _ ->] := write_get_varP hw.
+(*      rewrite get_var_set; last first.
+    + rewrite hty. apply truncatable_type_of. *)
     case: eqP.
-    + move=> _ [<-].
-      rewrite vm_truncate_val_eq //=.
+    + move=> _ [<-]. truncatable subtype value_uincl word_uincl wunsigned
+      have /write_varP [] := hw.
+      rewrite vm_truncate_val_eq;
+        last by rewrite (truncate_val_has_type htrunc).
       t_xrbindP=> _ <-.
+      have := hseme1 _ _ hsem.
+      v'
+      have: v = v'.
+      + move: hw; rewrite /write_var /set_var.
+        t_xrbindP=> vm_ h1 h2 <-.
+      write_var stype
+      truncatable truncate_val
+      have := hseme1 _ _ hsem.
       apply: hseme1. apply hsem.
     move=> ? h1 h2.
     have := hwf1.(wft_sem) h1 h2. done.
@@ -2108,25 +2126,32 @@ Proof.
   move=> _. apply hwf.(wft_sem).
 Qed.
 
+(*
 write_none
 write_var
 set_var
+*)
 
-Lemma wf_table_set_var table se s1 e v r s1' table' :
+Lemma wf_table_set_var2 table se s1 e v r s1' table' :
   wf_table table se (evm s1) ->
   sem_pexpr true gd s1 e = ok v ->
   write_lval true gd r v s1 = ok s1' ->
-  (update_table table r e) = ok table' ->
+  update_table table r e = ok table' ->
   exists se',
-    wf_table table' se' (evm s1'). pexpr concl:stype
+    wf_table table' se' (evm s1').
 Proof.
   case: r => /=.
-  + move=> _ ? hwf _ /write_noneP [-> _ _]. exists se. done.
+  + move=> _ ? hwf _ /write_noneP [-> _ _] [<-]. exists se. done.
   + move=> x hwf hsem hw.
-    case h: symbolic_of_pexpr => [[table' e']|].
-    + have [se1 hwf1 he1] := wf_table_symbolic_of_pexpr h hwf.
-      exists (with_vm se1 (evm se1).[x <- v]).
+    case h: symbolic_of_pexpr => [[table'' e']|].
+    + move=> /o2rP.
+      rewrite /table_set_var.
+      case: Sv_memP => // hnin.
+      move=> [<-].
+      have [se1 hwf1 he1] := wf_table_symbolic_of_pexpr h hwf.
+      exists se1.
       split.
+(*       exists (with_vm se1 (evm se1).[x <- v]). *)
       + move=> y ey /=.
         rewrite Mvar.setP.
         case: eqP.
@@ -2138,7 +2163,7 @@ Proof.
       + move=> <- [<-] /=.
       have H := he1 gd v hsem.
       have [_ _ ->] := write_get_varP_eq hw.
-      t_xrbindP=> _ <-.
+      t_xrbindP=> _ <-. sem
       rewrite vm_truncate_val_eq. rewrite -H.
       apply eq_on_sem_pexpr. done. simpl.
       move=> y hin. rewrite Vm.setP_neq //. apply /eqP.
