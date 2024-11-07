@@ -686,6 +686,7 @@ Context (clone : var_i -> int -> var_i).
 (* Add a mapping inside a table, but checks before that the program variable is
    not fresh. *)
 Definition table_set_var t x e :=
+  (* FIXME: do we need this check? *)
   if Sv.mem x t.(vars) then None
   else
     Some {|
@@ -697,6 +698,7 @@ Definition table_set_var t x e :=
 Definition table_fresh_var t x :=
   let x' := clone x t.(counter) in
   if Sv.mem x' t.(vars) then None (* variable not fresh *)
+  (* FIXME: do we need this check? *)
   else if Mvar.get t.(bindings) x' is Some _ then None (* variable not fresh *)
   else
     let t :=
@@ -788,12 +790,17 @@ Definition update_table table lv ty e :=
     | None => ok (remove_binding table x)
     | Some (table, e) =>
       Let _ :=
+        (* FIXME: do we need to be that strict? *)
         assert (x.(vtype) == ty)
                (stk_ierror_basic x "invalid type for assignment (update_table)")
       in
       o2r (stk_ierror_no_var "variable not fresh (update_table)")
           (table_set_var table x e)
     end
+  | Laset _ _ _ x _ | Lasub _ _ _ x _ =>
+    (* if I'm not mistaken, there are actually no arrays in the table, but this
+       avoids maintaining this invariant *)
+    ok (remove_binding table x)
   | _ => ok table
   end.
 
