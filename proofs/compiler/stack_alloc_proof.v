@@ -285,6 +285,22 @@ Definition wfr_WF (rmap : region_map) se :=
     Mvar.get rmap.(var_region) x = Some sr ->
     wf_sub_region se sr x.(vtype).
 
+(* A well-formed interval can be associated to a concrete interval. *)
+Definition wf_interval se i :=
+  exists ci, mapM (sem_slice se) i = ok ci.
+
+Definition wf_status se status :=
+  match status with
+  | Borrowed i => wf_interval se i
+  | _ => True
+  end.
+
+Definition wfr_STATUS (rmap : region_map) se :=
+  forall r status_map x status,
+    Mr.get rmap.(region_var) r = Some status_map ->
+    Mvar.get status_map x = Some status ->
+    wf_status se status.
+
 (* This allows to read uniformly in words and arrays. *)
 Definition get_val_byte v off :=
   match v with
@@ -302,18 +318,14 @@ Definition sub_region_addr se sr :=
 Definition offset_in_concrete_slice cs off :=
   ((cs.(cs_ofs) <=? off) && (off <? cs.(cs_ofs) + cs.(cs_len)))%Z.
 
-Definition valid_offset_slice se s off :=
-  exists2 cs, sem_slice se s = ok cs & ~ offset_in_concrete_slice cs off.
-(*
-Definition offset_in_zone se z off :=
-  forall cs, sem_zone se z = ok cs ->
-  offset_in_concrete_slice cs off.
-*)
-Fixpoint valid_offset_interval se i off :=
-  match i with
-  | [::] => True
-  | s :: i => valid_offset_slice se s off /\ valid_offset_interval se i off
-  end.
+(* "concrete interval" is just [seq concrete_slice] *)
+Definition offset_in_concrete_interval ci off :=
+  has (fun cs => offset_in_concrete_slice cs off) ci.
+
+Definition valid_offset_interval se i off :=
+  forall ci,
+    mapM (sem_slice se) i = ok ci ->
+    ~ offset_in_concrete_interval ci off.
 
 Definition valid_offset se status off : Prop :=
   match status with
@@ -375,7 +387,8 @@ Definition f rmap x :=
 *)
 
 Definition wfr_VAL (rmap:region_map) se (s1:estate) (s2:estate) :=
-  forall x sr bytes v, check_gvalid rmap x = Some (sr, bytes) -> 
+  forall x sr bytes v,
+    check_gvalid rmap x = Some (sr, bytes) ->
     get_gvar true gd s1.(evm) x = ok v ->
     eq_sub_region_val x.(gv).(vtype) se s2.(emem) sr bytes v.
 
@@ -401,6 +414,8 @@ Definition wfr_PTR (rmap:region_map) se (s2:estate) :=
 Class wf_rmap (rmap:region_map) se (s1:estate) (s2:estate) := {
   wfr_wf  : wfr_WF rmap se;
     (* sub-regions in [rmap] are well-formed *)
+  wfr_status : wfr_STATUS rmap se;
+    (* statuses in [rmap] are well-formed *)
   wfr_val : wfr_VAL rmap se s1 s2;
     (* [rmap] remembers for each relevant program variable which part of the target
        memory contains the value that this variable has in the source. These pieces
@@ -471,15 +486,37 @@ Proof.
   by split=> /=; lia.
 Qed.
 
-Lemma check_gvalid_wf rmap se x sr_bytes :
+Lemma check_gvalid_wf rmap se x sr_status :
   wfr_WF rmap se ->
-  check_gvalid rmap x = Some sr_bytes ->
-  wf_sub_region se sr_bytes.1 x.(gv).(vtype).
+  check_gvalid rmap x = Some sr_status ->
+  wf_sub_region se sr_status.1 x.(gv).(vtype).
 Proof.
   move=> hwfr.
   rewrite /check_gvalid; case: (@idP (is_glob x)) => hg.
   + by case heq: Mvar.get => [[??]|//] [<-] /=; apply (sub_region_glob_wf se (wf_globals heq)).
   by case heq: Mvar.get => // -[<-]; apply hwfr.
+Qed.
+
+Lemma get_var_status_wf_status rmap se r x :
+  wfr_STATUS rmap se ->
+  wf_status se (get_var_status rmap r x).
+Proof.
+  move=> hwfs.
+  rewrite /get_var_status /get_status /get_status_map.
+  case hsm: Mr.get => [status_map|//] /=.
+  case hstatus: Mvar.get => [status'|//] /=.
+  exact: hwfs hsm hstatus.
+Qed.
+
+Lemma check_gvalid_wf_status rmap se x sr_status :
+  wfr_STATUS rmap se ->
+  check_gvalid rmap x = Some sr_status ->
+  wf_status se sr_status.2.
+Proof.
+  move=> hwfs.
+  rewrite /check_gvalid; case: (@idP (is_glob x)) => hg.
+  + by case heq: Mvar.get => [[??]|//] [<-] /=.
+  by case heq: Mvar.get => // -[<-]; apply: get_var_status_wf_status hwfs.
 Qed.
 
 Definition valid_vpk rv se s2 x sr vpk :=
@@ -495,9 +532,9 @@ Proof.
 Qed.
 
 (* A variant of [wfr_PTR] for [gvar]. *)
-Lemma wfr_gptr rmap se s1 s2 x sr bytes :
+Lemma wfr_gptr rmap se s1 s2 x sr status :
   wf_rmap rmap se s1 s2 ->
-  check_gvalid rmap x = Some (sr, bytes) ->
+  check_gvalid rmap x = Some (sr, status) ->
   exists vpk, get_var_kind pmap x = ok (Some vpk)
   /\ valid_vpk rmap se s2 x.(gv) sr vpk.
 Proof.
@@ -2233,21 +2270,41 @@ Proof.
   rewrite (sem_zone_vm_uincl hincl ok_cs) /=. done.
 Qed.
 
-Lemma valid_offset_slice_vm_uincl se vme s off :
-  vm_uincl se.(evm) vme ->
-  valid_offset_slice se s off -> valid_offset_slice (with_vm se vme) s off.
+(* TODO: better name & move *)
+Lemma mapM_ext_alt {eT aT bT} (f1 f2 : aT -> result eT bT) m m' :
+  (forall a b, List.In a m -> f1 a = ok b -> f2 a = ok b) ->
+  mapM f1 m = ok m' ->
+  mapM f2 m = ok m'.
 Proof.
-  move=> huincl.
-  move=> [cs ok_ofs hnin]; exists cs=> //.
-  have := sem_slice_vm_uincl huincl ok_ofs. done.
+  elim: m m' => [//|a m ih] /= m' hext.
+  t_xrbindP=> b ok_b {}m' ok_m' <-.
+  rewrite (hext _ _ _ ok_b) /=; last by left.
+  rewrite (ih _ _  ok_m') //.
+  by move=> ???; apply hext; right.
 Qed.
 
 Lemma valid_offset_interval_vm_uincl se vme i off :
   vm_uincl se.(evm) vme ->
-  valid_offset_interval se i off -> valid_offset_interval (with_vm se vme) i off.
+  wf_interval se i ->
+  valid_offset_interval se i off <-> valid_offset_interval (with_vm se vme) i off.
+Proof.
+  move=> huincl [ci ok_ci].
+  have ok_ci_alt: mapM (sem_slice (with_vm se vme)) i = ok ci.
+  + apply: mapM_ext_alt ok_ci.
+    move=> s cs _ ok_cs.
+    exact: sem_slice_vm_uincl huincl ok_cs.
+  rewrite /valid_offset_interval ok_ci ok_ci_alt.
+  by split; move=> hvalid _ [<-]; apply hvalid.
+Qed.
+
+Lemma valid_offset_vm_uincl se vme status off :
+  vm_uincl se.(evm) vme ->
+  wf_status se status ->
+  valid_offset se status off <-> valid_offset (with_vm se vme) status off.
 Proof.
   move=> huincl.
-  elim: i => [//|s i ih] /=. move=> [/(valid_offset_slice_vm_uincl huincl) ? /ih{}ih]. split=> //.
+  case: status => //= i.
+  exact: valid_offset_interval_vm_uincl huincl.
 Qed.
 
 Lemma valid_state_set_var table rmap se m0 s1 s2 x v table' vme :
@@ -2269,14 +2326,21 @@ Proof.
   + by rewrite Vm.setP_neq //; assert (h:=rip_in_new); apply/eqP => ?; subst x; apply hnin.
   + by rewrite Vm.setP_neq //; assert (h:=rsp_in_new); apply/eqP => ?; subst x; apply hnin.
   + by move=> y hy hnnew; rewrite !Vm.setP heqvm.
-  rewrite /with_vm /=; case: hwfr => hwfsr hval hptr.
+  rewrite /with_vm /=; case: hwfr => hwfsr hwfs hval hptr.
   constructor => //.
   + move=> y sry /hwfsr [h1 h2].
     split=> //.
     have [cs h3 h4] := h2.
     exists cs => //.
     apply: sem_zone_vm_uincl h3. done.
-  + move=> y sr bytes vy hy; have ? := get_localn_checkg_diff hget hptr hy.
+  + move=> r status_map y status h1 h2.
+    have := hwfs _ _ _ _ h1 h2.
+    case: status {h2} => //= i.
+    move=> [ci ok_ci]. exists ci.
+    apply: mapM_ext_alt ok_ci.
+    move=> s cs _ ok_cs.
+    by apply: (sem_slice_vm_uincl huincl ok_cs).
+  + move=> y sr status vy hy; have ? := get_localn_checkg_diff hget hptr hy.
     simpl.
     rewrite get_gvar_neq //.
     move=> h1.
@@ -2288,17 +2352,31 @@ Proof.
     have /= [ofs' ok_ofs' _] := wunsigned_sub_region_addr hwf ok_cs.
     have := sub_region_addr_vm_uincl huincl ok_ofs'.
     rewrite ok_ofs => -[?]; subst ofs'. done.
-    case: bytes {hy hread} ok_off => //=.
-    move=> i.
-    valid_offset_interval
-    move: ok_ofs; rewrite /sub_region_addr.
-    t_xrbindP=> ? h <-.
-    have := sem_zone_vm_uincl huincl. h.
-     have /= := hval _.
+    apply (valid_offset_vm_uincl _ huincl).
+    have := check_gvalid_wf_status hwfs hy. done.
+    done.
   move=> y mp hy; have [pk [hgety hpk]]:= hptr y mp hy; exists pk; split => //.
-  case: pk hgety hpk => //= yp hyp.
-  assert (h := wfr_new (wf_locals hyp)).
-  by rewrite Vm.setP_neq //;apply /eqP => /=; SvD.fsetdec.
+  case: pk hgety hpk => //=.
+  + move=> yp hyp.
+    assert (h := wfr_new (wf_locals hyp)).
+    rewrite Vm.setP_neq //. 2: apply /eqP => /=; SvD.fsetdec.
+    have hwf := hwfsr _ _ hy.
+    have [cs ok_cs _] := hwf.(wfsr_zone).
+    have [addr ok_addr _] := wunsigned_sub_region_addr hwf ok_cs.
+    have ok_addr_alt := sub_region_addr_vm_uincl huincl ok_addr.
+    rewrite ok_addr ok_addr_alt. done.
+  move=> x' ofs ws cs f hget'.
+  have hwf := hwfsr _ _ hy.
+  have [cs' ok_cs' _] := hwf.(wfsr_zone).
+  have [addr ok_addr _] := wunsigned_sub_region_addr hwf ok_cs'.
+  have ok_addr_alt := sub_region_addr_vm_uincl huincl ok_addr.
+  rewrite ok_addr ok_addr_alt.
+  have /wf_locals /= hwfs' := hget'.
+  have hwfs'' := sub_region_stkptr_wf se hwfs'.
+  have [cs'' ok_cs'' _] := hwfs''.(wfsr_zone).
+  have [addr' ok_addr' _] := wunsigned_sub_region_addr hwfs'' ok_cs''.
+  have ok_addr_alt' := sub_region_addr_vm_uincl huincl ok_addr'.
+  rewrite ok_addr' ok_addr_alt'. done.
 Qed.
 
 Lemma valid_state_set_var table rmap se m0 s1 s2 x v:
