@@ -1342,7 +1342,19 @@ module EcLeakConstantTimeGlobal(EE: EcExpression): EcLeakage = struct
   let ec_leak_call_acc env = []
 end
 
-module EcLeakConstantTime(EE: EcExpression): EcLeakage = struct
+module type LeakageConfig = sig
+  val leak_values: bool
+end
+
+module LC_CT: LeakageConfig = struct
+  let leak_values = false
+end
+
+module LC_Val: LeakageConfig = struct
+  let leak_values = true
+end
+
+module EcLeakLocal(EE: EcExpression) (LC: LeakageConfig): EcLeakage = struct
   open EE
 
   let asgn s e = ESasgn ([LvIdent [s]], e)
@@ -1351,26 +1363,38 @@ module EcLeakConstantTime(EE: EcExpression): EcLeakage = struct
 
   let leak_addr e = Eapp (ec_ident "Leak_int", [e])
 
-  let leak_val env e =
+  let leak_val env ?(ignore_array=false) e =
     let sty = match ty_expr e with
-    | Bty Bool -> "bool"
-    | Bty Int  -> "int"
-    | Bty (U ws) -> fmt_Wsz ws
-    | Arr(ws, n) -> assert false
+    | Bty Bool -> Some "bool"
+    | Bty Int  -> Some "int"
+    | Bty (U ws) -> Some (fmt_Wsz ws)
+    | Arr(ws, n) -> if ignore_array then None else assert false
     in
-    let leakf = ec_ident (Format.sprintf "Leak_%s" sty) in
-    [Eapp (leakf, [toec_expr env e])]
-
+    match sty with
+    | Some sty ->
+      let leakf = ec_ident (Format.sprintf "Leak_%s" sty) in
+      [Eapp (leakf, [toec_expr env e])]
+    | None -> []
 
   let leak_addr_mem env x e =
     let addr = int_of_word env.pd (snd (add_ptr env.pd (gkvar x) e)) in
     [leak_addr (toec_expr env (addr))]
 
+  let leak_val_valleak env e = if LC.leak_values then leak_val env e else []
+
+  let leak_var env v = if LC.leak_values then leak_val env ~ignore_array:true (Pvar v) else []
+
   let rec leaks_e_rec env leaks e =
     match e with
-    | Pconst _ | Pbool _ | Parr_init _ | Pvar _ -> leaks
-    | Pload (_,_,x,e) -> leaks_e_rec env ((leak_addr_mem env x e) @ leaks) e
-    | Pget (_,_,_,_, e) | Psub (_,_,_,_,e) -> leaks_e_rec env ([leak_addr (toec_expr env e)] @ leaks) e
+    | Pconst _ | Pbool _ | Parr_init _ -> leaks
+    | Pvar v -> (leak_var env v) @ leaks
+    | Pload (_,_,x,e') ->
+        (leak_val_valleak env e) @
+        (leaks_e_rec env ((leak_addr_mem env x e') @ leaks) e')
+    | Pget (_,_,_,_, e') ->
+        (leak_val_valleak env e) @
+        (leaks_e_rec env ([leak_addr (toec_expr env e')] @ leaks) e')
+    | Psub (_,_,_,_,e') -> leaks_e_rec env ([leak_addr (toec_expr env e')] @ leaks) e'
     | Papp1 (_, e) -> leaks_e_rec env leaks e
     | Papp2 (_, e1, e2) -> leaks_es_rec env leaks [e1; e2]
     | PappN (_, es) -> leaks_es_rec env leaks es
@@ -1486,7 +1510,6 @@ module EcLeakConstantTime(EE: EcExpression): EcLeakage = struct
 
   let ec_leak_call_acc env = push_leak (leakacc env) (ec_ident (leakv_call env))
 end
-
 
 module Extraction
   (EA: EcArray)
@@ -1854,7 +1877,8 @@ let extract ((globs,funcs):('info, 'asm) prog) arch pd asmOp model amodel fnames
   let module EE = EcExpression(EA) in
   let module EL: EcLeakage = (val match env.model with
     | Normal -> (module EcLeakNormal(EE): EcLeakage)
-    | ConstantTime -> (module EcLeakConstantTime(EE): EcLeakage)
+    | ConstantTime -> (module EcLeakLocal(EE)(LC_CT): EcLeakage)
+    | ValLeak -> (module EcLeakLocal(EE)(LC_Val): EcLeakage)
     | ConstantTimeGlobal -> (module EcLeakConstantTimeGlobal(EE): EcLeakage)
   ) in
   let module E = Extraction(EA)(EL) in

@@ -139,6 +139,7 @@ type architecture =
 
 (* -------------------------------------------------------------------- *)
 type model = 
+  | ValLeak
   | ConstantTime
   | ConstantTimeGlobal
   | Normal
