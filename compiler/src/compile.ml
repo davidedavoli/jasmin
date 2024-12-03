@@ -15,8 +15,7 @@ let parse_file arch_info fname =
   let env =
     List.fold_left Pretyping.Env.add_from Pretyping.Env.empty
       !Glob_options.idirs
-  in
-  Pretyping.tt_program arch_info env fname
+  in Pretyping.tt_program arch_info env fname
 
 (* -------------------------------------------------------------------- *)
 let rec warn_extra_i pd asmOp i =

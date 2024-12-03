@@ -4,9 +4,12 @@ open CommonCLI
 
 let parse_and_print arch call_conv =
   let module A = (val get_arch_module arch call_conv) in
-  fun output file warn ->
+  fun output file mjazz warn ->
     if not warn then Utils.nowarning ();
-    let _, _, ast = Compile.parse_file A.arch_info file in
+    if mjazz then Glob_options.modular_jazz := true;
+    let ast = (if mjazz
+               then BatFile.with_file_in file (Parseio.parse_program ~name:file)
+               else let _, _, ast = Compile.parse_file A.arch_info file in ast) in
     let out, close =
       match output with
       | None -> (stdout, ignore)
@@ -26,6 +29,10 @@ let output =
   in
   Arg.(value & opt (some string) None & info [ "o"; "output" ] ~docv:"TEX" ~doc)
 
+let mjazz =
+  let doc = "Parse modular features ('-mjazz' flag in 'jasminc')" in
+  Arg.(value & flag & info ["m"; "M"; "modular"] ~doc)
+
 let () =
   let doc = "Pretty-print Jasmin source programs into LATEX" in
   let man =
@@ -39,6 +46,5 @@ let () =
   let info =
     Cmd.info "jasmin2tex" ~version:Glob_options.version_string ~doc ~man
   in
-  Cmd.v info Term.(const parse_and_print $ arch $ call_conv $ output $ file
-    $ warn)
+  Cmd.v info Term.(const parse_and_print $ arch $ call_conv $ output $ file $ mjazz $ warn)
   |> Cmd.eval |> exit
