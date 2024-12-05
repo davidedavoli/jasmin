@@ -238,7 +238,7 @@ let fully_qualified (stack: (A.symbol * 'a) list) n =
   List.fold_left (fun n (ns, _) -> qualify ns n) n stack
 
 (* -------------------------------------------------------------------- *)
-module Env : sig
+module Env (* : sig
   type 'asm env
 
   val empty : 'asm env
@@ -288,7 +288,7 @@ module Env : sig
     val get  : 'asm env -> (P.funname * (Z.t * Z.t) list) L.located list
   end
 
-end  = struct
+end *) = struct
 
   type loader = 
     { loaded : (A.symbol, Path.t list) Map.t (* absolute path loaded in each namespace *)
@@ -2251,19 +2251,7 @@ let rec tt_item arch_info (env : 'asm Env.env) pt : 'asm Env.env =
         ~loc:Lnone
         ~kind:"compilation"
         "open clause only supported in `-mjazz` mode"     
-(*
-and tt_file_loc arch_info ~preloaded from env fname =
-  fst (tt_file arch_info ~preloaded env from (Some (L.loc fname)) (L.unloc fname))
 
-and tt_file arch_info ?(preloaded=Map.empty) env from loc fname =
-  let fmodule = Proc_mjazz.fmodule_name fname in
-  match Map.find_opt fmodule preloaded, Env.enter_file env from loc fname with
-  | _, None -> env, []
-  | Some ast, Some(env, fname) ->
-    List.fold_left (tt_item arch_info ~preloaded) env ast, ast
-  | None, Some(env, fname) ->
-    let ast = Parseio.parse_program ~name:fname in
-*)
 and tt_file_loc arch_info from env fname =
   fst (tt_file arch_info env from (Some (L.loc fname)) (L.unloc fname))
 
