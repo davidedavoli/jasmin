@@ -108,7 +108,7 @@ let main () =
         | Some conf -> SafetyConfig.load_config conf
         | None -> () in
 
-    let env, pprog, _ast =
+    let depends, to_exec, pprog =
       try Compile.parse_file Arch.arch_info infile
       with
       | Annot.AnnotationError (loc, code) -> hierror ~loc:(Lone loc) ~kind:"annotation error" "%t" code
@@ -125,7 +125,7 @@ let main () =
     if !print_dependencies then begin
       Format.printf "%a" 
         (pp_list " " (fun fmt p -> Format.fprintf fmt "%s" (BatPathGen.OfString.to_string p)))
-        (List.tl (List.rev (Pretyping.Env.dependencies env)));
+        (List.tl (List.rev depends));
       exit 0
     end;
 
@@ -196,7 +196,6 @@ let main () =
 
     if !debug then Printf.eprintf "translated to coq \n%!";
 
-    let to_exec = Pretyping.Env.Exec.get env in
     if to_exec <> [] then begin
         let exec { L.pl_loc = loc ; L.pl_desc = (f, m) } =
           let ii = L.i_loc0 loc, [] in

@@ -1,4 +1,5 @@
 open Prog
+open Mprog
 open Wsize
 open Sopn
 
@@ -15,8 +16,8 @@ val preprocess : wsize -> 'asm asmOp -> (unit, 'asm) pprog -> (unit, 'asm) prog
 val parse_file :
   ('reg, 'regx, 'xreg, 'rflag, 'cond, 'asm_op, 'extra_op) Pretyping.arch_info ->
   string ->
-  ('reg, 'regx, 'xreg, 'rflag, 'cond, 'asm_op, 'extra_op) Arch_extra.extended_op
-  Pretyping.Env.env
+  string list list
+  * (funname * (Z.t * Z.t) list) Location.located list
   * ( unit,
       ( 'reg,
         'regx,
@@ -28,11 +29,11 @@ val parse_file :
       Arch_extra.extended_op )
     pmod_item
     list
-  * Syntax.pprogram
 (** Parsing and pre-typing of a complete file.
 
   Raises `Pretyping.TyError` and `Syntax.ParseError`.
   *)
+
 
 val compile :
   (module Arch_full.Arch

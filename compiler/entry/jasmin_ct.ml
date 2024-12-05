@@ -6,7 +6,7 @@ open Utils
 let parse_and_check arch call_conv =
   let module A = (val get_arch_module arch call_conv) in
   let check ~doit infer ct_list speculative pass file =
-    let _env, pprog, _ast =
+    let _depends, _to_exec, pprog =
       try Compile.parse_file A.arch_info file with
       | Annot.AnnotationError (loc, code) ->
           hierror ~loc:(Lone loc) ~kind:"annotation error" "%t" code

@@ -1,5 +1,6 @@
 (* -------------------------------------------------------------------- *)
 open Utils
+open Pretyping
 module Path = BatPathGen.OfString
 module F = Format
 module L = Location
@@ -7,8 +8,28 @@ module A = Annotations
 module S = Syntax
 module E = Expr
 module P = Prog
+module M = Mprog
 module W = Wsize
 module T = Type
+
+
+
+let parse_mfile arch_info idirs fname =
+  let menv, mprog = [], []
+  in menv, mprog
+
+let instantiate_mprog menv mprog = []
+
+(** Parses (modular) program and resolves instantiation *)
+let parse_file arch_info idirs fname =
+  let menv, mprog = [], []
+  in menv, [], instantiate_mprog menv mprog
+
+
+
+
+(*
+
 
 (* -------------------------------------------------------------------- *)
 let loc_of_tuples default locs =
@@ -2291,4 +2312,4 @@ let tt_program arch_info (env : 'asm Env.env) (fname : string) =
      rendre au plus un argument (pas un tableau).
    - Verifier les kind dans les applications de fonctions
 *)
-
+*)

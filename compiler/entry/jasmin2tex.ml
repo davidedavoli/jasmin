@@ -7,10 +7,15 @@ let parse_and_print arch call_conv =
   fun output file mjazz warn ->
     if not warn then Utils.nowarning ();
     if mjazz then Glob_options.modular_jazz := true;
-    let ast = (if mjazz
-               then BatFile.with_file_in file (Parseio.parse_program ~name:file)
-               else let _, _, ast = Compile.parse_file A.arch_info file in ast) in
-    let out, close =
+    let ast =
+      if mjazz
+      then BatFile.with_file_in file (Parseio.parse_program ~name:file)
+      else
+        let env = List.fold_left Pretyping.Env.add_from Pretyping.Env.empty
+                                 !Glob_options.idirs
+        in let _env, _pprog, ast = Pretyping.tt_program A.arch_info env file
+        in ast
+    in let out, close =
       match output with
       | None -> (stdout, ignore)
       | Some latexfile -> (open_out latexfile, close_out)
