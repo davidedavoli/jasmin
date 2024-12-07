@@ -297,10 +297,34 @@ end *) = struct
     ; from   : (A.symbol, Path.t) Map.t
     } 
 
+
+  type 'asm pfuncsig =
+    { f_loc : L.t
+    ; f_name : P.funname
+    ; f_tyin : P.pty list
+    ; f_tyout : P.pty list
+    ; f_pfunc : (unit,'asm) P.pfunc option
+    }
+
+  let pfunc_to_pfuncsig (pf: (unit,'asm) P.pfunc) =
+    { f_loc = pf.f_loc
+    ; f_name = pf.f_name
+    ; f_tyin = pf.f_tyin
+    ; f_tyout = pf.f_tyout
+    ; f_pfunc = Some pf
+    }
+
+(*
   type 'asm global_bindings = {
       gb_types : (A.symbol, P.pty L.located) Map.t;
       gb_vars : (A.symbol, P.pvar * E.v_scope) Map.t;
       gb_funs : (A.symbol, (unit, 'asm) P.pfunc * P.pty list) Map.t;
+    }
+*)
+  type 'asm global_bindings = {
+      gb_types : (A.symbol, P.pty L.located) Map.t;
+      gb_vars : (A.symbol, P.pvar * E.v_scope) Map.t;
+      gb_funs : (A.symbol, 'asm pfuncsig * P.pty list) Map.t;
     }
 
   type 'asm env = {
@@ -361,7 +385,7 @@ end *) = struct
       name L.pp_loc v'.P.v_dloc
 
   let err_duplicate_fun name (v, _) (fd, _) =
-    rs_tyerror ~loc:v.P.f_loc (DuplicateFun(name, fd.P.f_loc))
+    rs_tyerror ~loc:v.f_loc (DuplicateFun(name, fd.f_loc))
 
   let err_duplicate_type name t1 t2 =
     rs_tyerror ~loc:(L.loc t2) (DuplicateAlias (name,t1,t2))
@@ -486,11 +510,21 @@ end *) = struct
       let env = push_core env name x Sglob in
       { env with e_decls = P.MIglobal (x, e) :: env.e_decls }
 
+    let push_modp_global env x =
+      let name = x.P.v_name in
+      let x = rename_var (fully_qualified (fst env.e_bindings) name) x in
+      push_core env name x Sglob
+
     let push_param env (x, e) =
       let name = x.P.v_name in
       let x = rename_var (fully_qualified (fst env.e_bindings) name) x in
       let env = push_core env name x Slocal in
       { env with e_decls = P.MIparam (x, e) :: env.e_decls }
+
+    let push_modp_param env x =
+      let name = x.P.v_name in
+      let x = rename_var (fully_qualified (fst env.e_bindings) name) x in
+      push_core env name x Slocal
 
     let push_local (env : 'asm env) (v : P.pvar) =
       env.e_declared := P.Spv.add v !(env.e_declared);
@@ -539,6 +573,7 @@ end *) = struct
     let find (x : A.symbol) (env : 'asm env) =
       find (fun b -> b.gb_funs) x env
 
+(*
     let push env (v : (unit, 'asm) P.pfunc) rty =
       let name = v.P.f_name.P.fn_name in
       let v = { v with P.f_name = P.F.mk (fully_qualified (fst env.e_bindings) name) } in
@@ -554,6 +589,44 @@ end *) = struct
               (ns, doit top) :: stack, bot
       in
       { env with e_bindings; e_decls = P.MIfun v :: env.e_decls }
+      | Some fd ->
+         err_duplicate_fun name (v, ()) fd
+*)
+    let push env (v : (unit, 'asm) P.pfunc) rty =
+      let name = v.P.f_name.P.fn_name
+      in let v = { v with f_name = P.F.mk (fully_qualified (fst env.e_bindings) name) }
+      in let vsig = pfunc_to_pfuncsig v
+      in match find name env with
+      | None ->
+         let doit m =
+           { m with gb_funs = Map.add name (vsig, rty) m.gb_funs }
+         in
+         let e_bindings =
+           match env.e_bindings with
+           | [], bot -> [], doit bot
+           | (ns, top) :: stack, bot ->
+              (ns, doit top) :: stack, bot
+      in
+      { env with e_bindings; e_decls = P.MIfun v :: env.e_decls }
+      | Some fd ->
+         err_duplicate_fun name (vsig, ()) fd
+
+    let push_modp_fun env (v : 'asm pfuncsig) =
+      let name = v.f_name.P.fn_name
+      in let v = { v with f_name = P.F.mk (fully_qualified (fst env.e_bindings) name) }
+      in let rty = v.f_tyout
+      in match find name env with
+      | None ->
+         let doit m =
+           { m with gb_funs = Map.add name (v,rty) m.gb_funs }
+         in
+         let e_bindings =
+           match env.e_bindings with
+           | [], bot -> [], doit bot
+           | (ns, top) :: stack, bot ->
+              (ns, doit top) :: stack, bot
+      in
+      { env with e_bindings }
       | Some fd ->
          err_duplicate_fun name (v, ()) fd
 
@@ -1316,8 +1389,13 @@ let tt_lvalue pd (env : 'asm Env.env) { L.pl_desc = pl; L.pl_loc = loc; } =
 
 (* -------------------------------------------------------------------- *)
 
+(*
 let f_sig f =
   List.map P.ty_i f.P.f_ret, List.map (fun v -> v.P.v_ty) f.P.f_args
+*)
+let f_sig (f: 'asm Env.pfuncsig) =
+  f.f_tyout, f.f_tyin
+
 
 let prim_sig asmOp p : 'a P.gty list * 'a P.gty list * Sopn.arg_desc list =
   let f = conv_ty in
@@ -1699,44 +1777,51 @@ let check_lval_pointer loc x =
   | P.Lvar x when P.is_ptr (L.unloc x).P.v_kind -> () 
   | _ -> rs_tyerror ~loc (NotAPointer x)
 
-let mk_call loc inline lvs f es =
+let mk_call loc inline lvs fsig es =
   let open P in
-  begin match f.f_cc with
-  | Internal -> ()
-  | Export _ ->
-    if not inline then
-      warning Always (L.i_loc0 loc) "export function will be inlined"
-  | Subroutine _ when not inline ->
-    let check_lval = function
-      | Lnone _ | Lvar _ | Lasub _ -> ()
-      | Lmem _ | Laset _ -> rs_tyerror ~loc (string_error "memory/array assignment are not allowed here") in
-    let rec check_e = function
-      | Pvar _ | Psub _ -> ()
-      | Pif (_, _, e1, e2) -> check_e e1; check_e e2
-      | _ -> rs_tyerror ~loc (string_error "only variables and subarray are allowed in arguments of non-inlined function") in
-    List.iter check_lval lvs;
-    List.iter check_e es
-  | Subroutine _ -> ()
-  end;
+  match fsig.Env.f_pfunc with
+  | None -> (* checks are delayed... *)
+    (* FIXME: raise an error if not in MJazz mode *)
+    P.Ccall (lvs, fsig.f_name, es)
+  | Some f ->
+    (* Checks depending on CC *)
+    begin match f.f_cc with
+      | Internal -> ()
+      | Export _ ->
+        if not inline then
+          warning Always (L.i_loc0 loc) "export function will be inlined"
+      | Subroutine _ when not inline ->
+        let check_lval = function
+          | Lnone _ | Lvar _ | Lasub _ -> ()
+          | Lmem _ | Laset _ -> rs_tyerror ~loc (string_error "memory/array assignment are not allowed here") in
+        let rec check_e = function
+          | Pvar _ | Psub _ -> ()
+          | Pif (_, _, e1, e2) -> check_e e1; check_e e2
+          | _ -> rs_tyerror ~loc (string_error "only variables and subarray are allowed in arguments of non-inlined function") in
+        List.iter check_lval lvs;
+        List.iter check_e es
+      | Subroutine _ -> ()
+    end;
 
-  (* Check writability *)
-  let check_ptr_writable x =
-     match x.v_kind with
-     | Stack (Pointer Writable) | Reg (_, Pointer Writable) -> true
-     | _ -> false in
-  let check_w x e =
-    if check_ptr_writable x then
-      let rec aux  = function
-        | Pvar y | Psub(_, _, _, y, _) ->
-          let y = L.unloc y.gv in
-          if not (check_ptr_writable y || y.v_kind = Stack Direct) then
-            rs_tyerror ~loc (string_error "argument %a needs to be writable" Printer.pp_pvar y)
-        | Pif (_, _, e1, e2) -> aux e1; aux e2
-        | _ -> assert false in
-      aux e in
-  List.iter2 check_w f.f_args es;
+    (* Check writability *)
+    let check_ptr_writable x =
+      match x.v_kind with
+      | Stack (Pointer Writable) | Reg (_, Pointer Writable) -> true
+      | _ -> false in
+    let check_w x e =
+      if check_ptr_writable x then
+        let rec aux  = function
+          | Pvar y | Psub(_, _, _, y, _) ->
+            let y = L.unloc y.gv in
+            if not (check_ptr_writable y || y.v_kind = Stack Direct) then
+              rs_tyerror ~loc (string_error "argument %a needs to be writable" Printer.pp_pvar y)
+          | Pif (_, _, e1, e2) -> aux e1; aux e2
+          | _ -> assert false in
+        aux e in
+    List.iter2 check_w f.f_args es;
 
-  P.Ccall (lvs, f.P.f_name, es)
+    P.Ccall (lvs, f.P.f_name, es)
+    
 
 let assign_from_decl (decl: S.vardecl L.located) =
   let v, e = L.unloc decl in
@@ -1759,18 +1844,25 @@ let rec tt_instr arch_info (env : 'asm Env.env) ((annot,pi) : S.pinstr) : 'asm E
       tt_assign env_lhs env_rhs ls `Raw (L.mk_loc el (S.PECombF(f, args))) None
 
     | ls, `Raw, { L.pl_desc = S.PECall (f, args); pl_loc = el }, None ->
-      let (f,tlvs) = tt_fun env_rhs f in
-      let _tlvs, tes = f_sig f in
+      let (fsig,tlvs) = tt_fun env_rhs f in
+      let _tlvs, tes = f_sig fsig in
       let lvs, is = tt_lvalues arch_info env_lhs (L.loc pi) ls None tlvs in
       assert (is = []);
       let es  = tt_exprs_cast arch_info.pd env_rhs (L.loc pi) args tes in
-      let is_inline = P.is_inline annot f.P.f_cc in
-      let annot =
-        if is_inline || FInfo.is_export f.P.f_cc
+      let is_inline =
+        match fsig.f_pfunc with
+        | None -> false (* We'll update this later *)
+        | Some f ->
+          f.P.f_cc = FInfo.Internal
+          || FInfo.is_export f.P.f_cc
+      in let is_inline =
+           is_inline || Annotations.has_symbol "inline" annot
+      in let annot =
+        if is_inline
         then Annotations.add_symbol ~loc:el "inline" annot
         else annot
       in
-      [mk_i ~annot (mk_call (L.loc pi) is_inline lvs f es)]
+      [mk_i ~annot (mk_call (L.loc pi) is_inline lvs fsig es)]
   | (ls, xs), `Raw, { pl_desc = PEPrim (f, args) }, None
         when L.unloc f = "spill" || L.unloc f = "unspill"  ->
     let op = L.unloc f in
@@ -2225,7 +2317,7 @@ let rec tt_item arch_info (env : 'asm Env.env) pt : 'asm Env.env =
   | S.PGlobal pg -> tt_global arch_info.pd env (L.loc pt) pg
   | S.Pexec   pf ->
     Env.Exec.push (L.loc pt)
-      (fst (tt_fun env pf.pex_name)).P.f_name
+      (fst (tt_fun env pf.pex_name)).f_name
       (List.map (fun (x, y) -> S.parse_int x, S.parse_int y) pf.pex_mem)
       env
   | S.Prequire (from, fs) ->
