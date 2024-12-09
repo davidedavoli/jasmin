@@ -15,8 +15,10 @@ type 'len module_app =
     ma_args : 'len moduleargs; }
 
 type 'len funsig =
-  { fs_tyin : 'len gty list;
-    fs_tyout : 'len gty list;
+  { fs_name  : funname
+  ; fs_loc   : L.t
+  ; fs_tyin  : 'len gty list
+  ; fs_tyout : 'len gty list
   }
 
 type 'len mparamdecl =
