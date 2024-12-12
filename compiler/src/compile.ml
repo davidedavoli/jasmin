@@ -20,7 +20,10 @@ let parse_file arch_info fname =
       List.fold_left Pretyping.Env.add_from Pretyping.Env.empty
         !Glob_options.idirs
     in let env, pprog, _ast = Pretyping.tt_program arch_info env fname
-    in Pretyping.Env.dependencies env, Pretyping.Env.Exec.get env, pprog
+    in Pretyping.Env.dependencies env
+     , Pretyping.Env.Exec.get env
+     , pprog
+     , []
 
 (* -------------------------------------------------------------------- *)
 let rec warn_extra_i pd asmOp i =

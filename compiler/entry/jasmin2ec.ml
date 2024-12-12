@@ -29,10 +29,13 @@ let extract_to_file prog arch pd asmOp model amodel fnames array_dir outfile =
 let parse_and_extract arch call_conv =
   let module A = (val get_arch_module arch call_conv) in
   let extract model old_array functions array_dir output file =
-    let _depends, _to_exec, pprog =
+    let _depends, _to_exec, pprog, _mprog =
       try Compile.parse_file A.arch_info file with
       | Annot.AnnotationError (loc, code) ->
           hierror ~loc:(Lone loc) ~kind:"annotation error" "%t" code
+      | Proc_mjazz.MJazzError (loc, code) ->
+        hierror ~loc:(Lone loc) ~kind:"modules error" "%a" Proc_mjazz.pp_mjazzerror
+          code
       | Pretyping.TyError (loc, code) ->
           hierror ~loc:(Lone loc) ~kind:"typing error" "%a" Pretyping.pp_tyerror
             code

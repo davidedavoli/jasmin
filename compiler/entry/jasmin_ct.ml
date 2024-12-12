@@ -6,13 +6,16 @@ open Utils
 let parse_and_check arch call_conv =
   let module A = (val get_arch_module arch call_conv) in
   let check ~doit infer ct_list speculative pass file =
-    let _depends, _to_exec, pprog =
+    let _depends, _to_exec, pprog, _mprog =
       try Compile.parse_file A.arch_info file with
       | Annot.AnnotationError (loc, code) ->
           hierror ~loc:(Lone loc) ~kind:"annotation error" "%t" code
       | Pretyping.TyError (loc, code) ->
           hierror ~loc:(Lone loc) ~kind:"typing error" "%a" Pretyping.pp_tyerror
             code
+      | Proc_mjazz.MJazzError (loc, code) ->
+        hierror ~loc:(Lone loc) ~kind:"modules error" "%a" Proc_mjazz.pp_mjazzerror
+          code
       | Syntax.ParseError (loc, msg) ->
           hierror ~loc:(Lone loc) ~kind:"parse error" "%s"
             (Option.default "" msg)
