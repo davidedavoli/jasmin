@@ -11,7 +11,11 @@ abstract theory ByteArray.
 
   op darray = dmap (dlist W8.dword size) of_list.
 
-  abbrev [-printing] get8 (t:t) (i:int)  : W8.t = t.[i].
+  abbrev [-printing] get8  (t:t) (i:int) : W8.t = t.[i].
+  abbrev [-printing] get8d (t:t) (i:int) : W8.t = t.[i].
+
+  abbrev [-printing] set8  (t:t) (i:int) (w:W8.t) : t = t.[i <- w].
+  abbrev [-printing] set8d (t:t) (i:int) (w:W8.t) : t = t.[i <- w].
 
   abstract theory WSB.
     type B.
