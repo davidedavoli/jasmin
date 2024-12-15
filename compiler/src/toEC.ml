@@ -1838,7 +1838,7 @@ struct
 
   let ec_randombytes env =
       let randombytes_decl a n =
-          let arr_ty = Format.sprintf "W8.t %s.t" (ec_Array env n) in
+          let arr_ty = toec_ty env (Arr (U8, n)) in
           {
               fname = Format.sprintf "randombytes_%i" n;
               args = [(a, arr_ty)];
