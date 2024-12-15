@@ -445,10 +445,6 @@ let set_var env x s =
 
 let add_var env x = set_var env x (mkname env x.v_name)
 
-let add_ty env = function
-    | Bty _ -> ()
-    | Arr (_ws, n) -> add_Array env n
-
 let empty_env arch pd model array_theories randombytes =
   {
     arch;
@@ -892,6 +888,7 @@ module type EcArray = sig
   val toec_lasub: env -> Warray_.arr_access * wsize * int * int gvar L.located * ec_expr -> ec_expr -> ec_expr
 
   val onarray_ty : env -> wsize -> int -> string
+  val add_arr : env -> wsize -> int -> unit
 end
 
 module EcArrayOld : EcArray = struct
@@ -1010,6 +1007,8 @@ module EcArrayOld : EcArray = struct
 
   let onarray_ty = onarray_ty_dfl
 
+  let add_arr env _ws n = add_Array env n
+
 end
 
 module EcWArray: EcArray = struct
@@ -1118,6 +1117,8 @@ module EcWArray: EcArray = struct
 
   let onarray_ty = onarray_ty_dfl
 
+  let add_arr env _ws n = add_Array env n
+
 end
 
 module EcBArray : EcArray = struct
@@ -1173,6 +1174,7 @@ module EcBArray : EcArray = struct
   let onarray_ty env ws n =
     Format.sprintf "%s.t" (ec_BArray env (arr_size ws n))
 
+  let add_arr env ws n = add_BArray env (arr_size ws n)
 end
 
 (* ------------------------------------------------------------------- *)
@@ -1650,6 +1652,11 @@ struct
   (* Instruction extraction *)
 
   let toec_ty = toec_ty EA.onarray_ty
+
+  let add_ty env = function
+    | Bty _ -> ()
+    | Arr (ws, n) -> EA.add_arr env ws n
+
 
   let ec_assgn env lv (etyo, etyi) e =
       let e = e |> ec_zeroext (etyo, etyi) |> ec_cast env (ty_lval lv, etyo) in
