@@ -20,8 +20,10 @@ abstract theory ByteArray.
   abstract theory WSB.
     type B.
     op r : int.
+    op _zero : B.
     op _of_list : W8.t list -> B.
     op (\bits8) : B -> int -> W8.t.
+
     axiom _gt0_r : 0 < r.
     axiom _nth_of_list (l: W8.t list) k :
       size l = r =>
@@ -30,6 +32,8 @@ abstract theory ByteArray.
       forall (w1 w2 : B),
         (forall (i : int), 0 <= i && i < r => (w1 \bits8 i) = (w2 \bits8 i)) =>
       w1 = w2.
+    axiom _zero_bits8 i : _zero \bits8 i = W8.zero.
+
 
     op get'Sd (t:t) (i:int) : B =
       _of_list (sub t i r)
@@ -89,56 +93,90 @@ abstract theory ByteArray.
       move=> /(ltr_pmul2l _ _gt0_r) ? /(ltr_pmul2l _ _gt0_r) ? /#.
     qed.
 
+    op of_list'S (l:B list) =
+      init (fun i => if i < List.size l * r then nth _zero l (i%/r) \bits8 (i%%r) else W8.zero).
+
+    lemma get8_of_list'S l i :
+      (of_list'S l).[i] =
+         if (0 <= i < ByteArray.size) /\ i < List.size l * r then nth _zero l (i%/r) \bits8 (i%%r) else W8.zero.
+    proof.
+      rewrite /of_list'S.
+      case: (0 <= i && i < ByteArray.size) => hi; last by rewrite get_out.
+      by rewrite initiE.
+    qed.
+
+    lemma get'S_of_list'S l i :
+      List.size l * r = ByteArray.size =>
+      get'S (of_list'S l) i = nth _zero l i.
+    proof.
+      move=> h; apply _wordP => k hk.
+      rewrite get'Sd_byte // get8_of_list'S.
+      rewrite (mulzC r i) edivz_eq 1:/# emodz_eq 1:/#.
+      case: (0 <= i < List.size l) => hi.
+      + have /# : (i + 1) * r <= size l * r by apply ler_wpmul2r => /#.
+      rewrite nth_out 1:// _zero_bits8 /#.
+    qed.
+
   end WSB.
 
   clone include WSB with
     type B <- W16.t,
     op r <- 2,
+    op _zero <- W16.zero,
     op _of_list <- W2u8.pack2,
     op (\bits8) <- W2u8.(\bits8),
     axiom _gt0_r <- W2u8.gt0_r,
     axiom _nth_of_list <- W2u8.get_pack2,
-    axiom _wordP <- W2u8.wordP
+    axiom _wordP <- W2u8.wordP,
+    axiom _zero_bits8 <- W2u8.get_zero
   rename [op, lemma, theory] "'S" as "16".
 
   clone include WSB with
     type B <- W32.t,
     op r <- 4,
+    op _zero <- W32.zero,
     op _of_list <- W4u8.pack4,
     op (\bits8) <- W4u8.(\bits8),
     axiom _gt0_r <- W4u8.gt0_r,
     axiom _nth_of_list <- W4u8.get_pack4,
-    axiom _wordP <- W4u8.wordP
+    axiom _wordP <- W4u8.wordP,
+    axiom _zero_bits8 <- W4u8.get_zero
   rename [op, lemma, theory] "'S" as "32".
 
   clone include WSB with
     type B <- W64.t,
     op r <- 8,
+    op _zero <- W64.zero,
     op _of_list <- W8u8.pack8,
     op (\bits8) <- W8u8.(\bits8),
     axiom _gt0_r <- W8u8.gt0_r,
     axiom _nth_of_list <- W8u8.get_pack8,
-    axiom _wordP <- W8u8.wordP
+    axiom _wordP <- W8u8.wordP,
+    axiom _zero_bits8 <- W8u8.get_zero
   rename [op, lemma, theory] "'S" as "64".
 
   clone include WSB with
     type B <- W128.t,
     op r <- 16,
+    op _zero <- W128.zero,
     op _of_list <- W16u8.pack16,
     op (\bits8) <- W16u8.(\bits8),
     axiom _gt0_r <- W16u8.gt0_r,
     axiom _nth_of_list <- W16u8.get_pack16,
-    axiom _wordP <- W16u8.wordP
+    axiom _wordP <- W16u8.wordP,
+    axiom _zero_bits8 <- W16u8.get_zero
   rename [op, lemma, theory] "'S" as "128".
 
   clone include WSB with
     type B <- W256.t,
     op r <- 32,
+    op _zero <- W256.zero,
     op _of_list <- W32u8.pack32,
     op (\bits8) <- W32u8.(\bits8),
     axiom _gt0_r <- W32u8.gt0_r,
     axiom _nth_of_list <- W32u8.get_pack32,
-    axiom _wordP <- W32u8.wordP
+    axiom _wordP <- W32u8.wordP,
+    axiom _zero_bits8 <- W32u8.get_zero
   rename [op, lemma, theory] "'S" as "256".
 
 end ByteArray.

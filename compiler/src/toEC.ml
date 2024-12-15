@@ -876,6 +876,9 @@ let toec_ty onarray env ty = match ty with
 let onarray_ty_dfl env ws n =
   Format.sprintf "%s.t %s.t" (fmt_Wsz ws) (ec_Array env n)
 
+let of_list_dfl env _ws n =
+  Eapp (Eident [ec_Array env n; "of_list"], [ec_ident "witness"])
+
 (* ------------------------------------------------------------------- *)
 (* Extraction of array operations *)
 
@@ -889,7 +892,11 @@ module type EcArray = sig
 
   val onarray_ty : env -> wsize -> int -> string
   val add_arr : env -> wsize -> int -> unit
+
+  val of_list :  env -> wsize -> int -> ec_expr
+
 end
+
 
 module EcArrayOld : EcArray = struct
   let ec_WArray_init env ws n =
@@ -1009,6 +1016,7 @@ module EcArrayOld : EcArray = struct
 
   let add_arr env _ws n = add_Array env n
 
+  let of_list =  of_list_dfl
 end
 
 module EcWArray: EcArray = struct
@@ -1119,6 +1127,7 @@ module EcWArray: EcArray = struct
 
   let add_arr env _ws n = add_Array env n
 
+  let of_list =  of_list_dfl
 end
 
 module EcBArray : EcArray = struct
@@ -1175,6 +1184,10 @@ module EcBArray : EcArray = struct
     Format.sprintf "%s.t" (ec_BArray env (arr_size ws n))
 
   let add_arr env ws n = add_BArray env (arr_size ws n)
+
+  let of_list env ws n =
+    Eident [ec_BArray env (arr_size ws n); Format.sprintf "of_list%i" (int_of_ws ws)]
+
 end
 
 (* ------------------------------------------------------------------- *)
@@ -1820,7 +1833,7 @@ struct
     | Global.Garr(p,t) ->
       let ws, t = Conv.to_array x.v_ty p t in
       let n = Array.length t in
-      env.array_theories := add_jarray !(env.array_theories) ws n;
+      EA.add_arr env ws n;
       env
 
   let jmodel env = match env.arch with
@@ -1832,16 +1845,14 @@ struct
       | ARM_M4 -> "SLH32"
 
   let ec_glob_decl env (x,d) =
-      let w_of_z ws z = Eapp (Eident [fmt_Wsz ws; "of_int"], [Econst z]) in
-      let mk_abbrev e = Iabbrev (ec_vars env x, e) in
+    let w_of_z ws z = Eapp (Eident [fmt_Wsz ws; "of_int"], [Econst z]) in
+    let mk_abbrev e = Iabbrev (ec_vars env x, e) in
     match d with
     | Global.Gword(ws, w) -> mk_abbrev (w_of_z ws (Conv.z_of_word ws w))
     | Global.Garr(p,t) ->
       let ws, t = Conv.to_array x.v_ty p t in
-      mk_abbrev (Eapp (
-          Eident [ec_Array env (Array.length t); "of_list"],
-          [ec_ident "witness"; Elist (List.map (w_of_z ws) (Array.to_list t))]
-      ))
+      mk_abbrev (Eapp (EA.of_list env ws (Array.length t),
+                       [Elist (List.map (w_of_z ws) (Array.to_list t))]))
 
   let ec_randombytes env =
       let randombytes_decl a n =
@@ -1877,13 +1888,13 @@ struct
   let toec_prog env asmOp globs funcs =
       let add_glob_env env (x, d) = add_var (add_glob_arrsz env (x, d)) x in
       let add_arrsz env f =
-        let add x ats =
+        let add x =
           match x.v_ty with
-          | Arr(ws, n) -> add_jarray ats ws n
-          | _ -> ats
+          | Arr(ws, n) -> EA.add_arr env ws n
+          | _ -> ()
         in
         let vars = vars_fc f in
-        env.array_theories := Sv.fold add vars !(env.array_theories);
+        Sv.iter add vars;
         env
       in
       let env = add_funcs env funcs
