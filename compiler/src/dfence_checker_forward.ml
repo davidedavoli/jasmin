@@ -365,7 +365,7 @@ let rec infer_msf_i ~withcheck fenv (tbl:(L.i_loc, Sv.t) Hashtbl.t) i ms =
     | Dfence, xs, _ ->
        checks ms xs;
        ms
-
+      
     | Spill _, _, _ -> ms
 
     | Other, xs, _ -> checks ms xs; ms
@@ -931,9 +931,14 @@ let ty_lval env ((msf, venv) as msf_e : msf_e) x ety : msf_e =
       let xty = if is_ptr (kind_i x)
           then Indirect(lp, le)
           else Direct le in
-      let msf = MSF.update msf (L.unloc x) in
+      let msf = MSF.update msf (L.unloc x) in 
       let venv = Env.set_ty env venv x xty in
-      msf, venv
+      msf,
+      begin match (L.unloc x).v_kind with
+      | Stack (Direct)    -> Env.corruption_speculative env venv le
+      | Stack (Pointer _) -> Env.corruption_speculative env venv lp
+      | _ -> venv
+      end
 
   | Lmem(_, _, x, i) ->
       ensure_public env venv (L.loc x) (Pvar (gkvar x));
@@ -955,11 +960,12 @@ let ty_lval env ((msf, venv) as msf_e : msf_e) x ety : msf_e =
               Indirect (lp, l)
         in
         Env.set_ty env venv x xty in
-
-      if ssafe_test x aa ws i then
-        msf, venv
-      else (* mispeculation has necessarily occured *)
-        msf, Env.corruption_speculative env venv le
+      let venv =
+        match (L.unloc x).v_kind with
+        | Reg (_, Direct) -> venv
+        | _ -> Env.corruption_speculative env venv le
+      in
+      msf, venv
 
   | Lasub(_, _, _, x, i) ->
       ensure_public_address env venv (L.loc x) x;
@@ -1078,13 +1084,24 @@ let rec ty_instr is_ct_asm fenv env ((msf,venv) as msf_e :msf_e) i =
       ty_lval env msf_e x xty
 
     | Protect, _, _ -> assert false
-      
+
+    | Dfence, [x], [e] ->
+      let _ = reg_lval ~direct:false loc x and _ = reg_expr ~direct:false loc e in
+      let xty =
+        match ty_expr env venv loc e with
+        | Direct (n, _) -> Direct (n, n)
+        | Indirect ((n, _), le) -> Indirect ((n, n), le) in
+
+      ty_lval env msf_e x xty
+ 
+    | Dfence, _, _ -> assert false      
+
     | Spill o, _, es ->
         let xs = List.map (reg_expr ~direct:false loc) es in
         if o = Pseudo_operator.Spill then msf, Env.set_spill env venv xs
         else msf, Env.set_unspill env venv xs
 
-    | (Dfence | Other), _, _  ->
+    | Other, _, _  ->
       let public = not (CT.is_ct_sopn is_ct_asm o) in
       let ety = ty_exprs_max ~public env venv loc es in
       ty_lvals1 env msf_e xs (declassify_ty env i.i_annot ety)

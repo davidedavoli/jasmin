@@ -19,7 +19,10 @@ Variant slh_op :=
   | SLHmove
   | SLHprotect of wsize
   | SLHprotect_ptr of positive
-  | SLHprotect_ptr_fail of positive.  (* Not exported to the user *)
+  | SLHprotect_ptr_fail of positive  (* Not exported to the user *)
+  | SLHdfence of wsize
+  | SLHdfence_ptr of positive.
+            
 
 Scheme Equality for slh_op.
 

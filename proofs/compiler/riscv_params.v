@@ -161,9 +161,21 @@ Definition riscv_loparams : lowering_params lowering_options :=
 (* ------------------------------------------------------------------------ *)
 (* Speculative execution operator lowering parameters. *)
 
+Definition riscv_sh_lower
+  (lvs : seq lval)
+  (slho : slh_op)
+  (es : seq pexpr) :
+  option copn_args :=
+  let O x := Oasm (BaseOp (None, x)) in
+  match slho with
+  | SLHinit  | SLHupdate  | SLHmove | SLHprotect _ | SLHprotect_ptr _ | SLHprotect_ptr_fail _ => None
+  | SLHdfence _  => Some (lvs, O DFENCE, es)
+  | SLHdfence_ptr _ => None (* Taken into account by stack alloc *)
+  end.
+
 Definition riscv_shparams : sh_params :=
   {|
-    shp_lower := fun _ _ _ => None;
+    shp_lower := riscv_sh_lower;
   |}.
 
 (* ------------------------------------------------------------------------ *)

@@ -331,6 +331,10 @@ Definition se_protect_ptr_fail_sem {p:positive} (t: WArray.array p) (msf : wmsf)
   Let _ := assert (msf == 0%R) ErrSemUndef in
   ok t.
 
+Definition se_dfence_sem {ws : wsize} (w : word ws) : word ws := w.
+
+Definition se_dfence_ptr_sem {p:positive} (t: WArray.array p) : WArray.array p := t.
+
 Definition SLHinit_str := "init_msf"%string.
 Definition SLHinit_instr :=
   mk_instr_desc_safe (pp_s SLHinit_str)
@@ -453,6 +457,49 @@ Definition SLHprotect_ptr_fail_instr p :=
      i_semi_safe  := fun _ => (@protect_ptr_fail_safe p);
   |}.
 
+Definition SLHdfence_str := "dfence"%string.
+Definition SLHdfence_instr ws :=
+  mk_instr_desc_safe (pp_sz SLHdfence_str ws)
+      [:: sword ws ]
+      [:: E 0 ] (* this info is irrelevant *)
+      [:: sword ws ]
+      [:: E 1 ]      (* this info is irrelevant *)
+      (@se_dfence_sem ws)
+      true.
+
+Lemma dfence_ptr_semu p vs vs' v:
+  List.Forall2 value_uincl vs vs' ->
+  @app_sopn_v [::sarr p] [::sarr p] (sem_prod_ok [:: sarr p] (@se_dfence_ptr_sem p)) vs = ok v ->
+  exists2 v' : values,
+   @app_sopn_v [::sarr p] [::sarr p] (sem_prod_ok [:: sarr p] (@se_dfence_ptr_sem p)) vs' = ok v' &
+   List.Forall2 value_uincl v v'.
+Proof.
+  rewrite /app_sopn_v /= => -[] {vs vs'} // v1 v2 + + /of_value_uincl_te -/(_ (sarr p)) /= hu.
+  move=> [ | ]; last by t_xrbindP.
+  move=> l' /List_Forall2_inv_l ->; t_xrbindP => > /hu [] t' -> ? <- <- /=.
+  by exists [::Varr t'] => //; constructor.
+Qed.
+
+Definition SLHdfence_ptr_str := "dfence_ptr"%string.
+Definition SLHdfence_ptr_instr p :=
+  let tin := [:: sarr p ] in
+  let semi := @se_dfence_ptr_sem p in
+  {| str      := pp_s SLHdfence_ptr_str;
+     tin      := tin;
+     i_in     := [:: E 0]; (* this info is irrelevant *)
+     tout     := [:: sarr p ];
+     i_out    := [:: E 1 ]; (* this info is irrelevant *)
+     conflicts:=[::];
+     semi     := sem_prod_ok tin semi;
+     semu     := @dfence_ptr_semu p;
+     i_safe   := [::];
+     i_valid  := true;
+     i_safe_wf    := refl_equal;
+     i_semi_errty := fun _ => (@sem_prod_ok_error _ tin semi ErrType);
+     i_semi_safe  := fun _ => (@sem_prod_ok_safe _ tin semi);
+  |}.
+
+
 Definition slh_op_instruction_desc  (o : slh_op) : instruction_desc :=
   match o with
   | SLHinit               => SLHinit_instr
@@ -461,6 +508,8 @@ Definition slh_op_instruction_desc  (o : slh_op) : instruction_desc :=
   | SLHprotect ws         => SLHprotect_instr ws
   | SLHprotect_ptr p      => SLHprotect_ptr_instr p
   | SLHprotect_ptr_fail p => SLHprotect_ptr_fail_instr p
+  | SLHdfence ws          => SLHdfence_instr ws
+  | SLHdfence_ptr p       => SLHdfence_ptr_instr p
   end.
 
 (* ---------------------------------------------------------------------- *)
@@ -508,7 +557,10 @@ Definition sopn_prim_string : seq (string * prim_constructor sopn) :=
     ("update_msf" , primM (Oslh SLHupdate));
     ("mov_msf"    , primM (Oslh SLHmove));
     ("protect"    , primP (fun sz => Oslh (SLHprotect sz)));
-    ("protect_ptr", primM (Oslh (SLHprotect_ptr xH))) (* The size is fixed later *)
+    ("protect_ptr", primM (Oslh (SLHprotect_ptr xH))); (* The size is fixed later *)
+    ("dfence"    , primP (fun sz => Oslh (SLHdfence sz)));
+    ("dfence_ptr", primM (Oslh (SLHdfence_ptr xH))) (* The size is fixed later *)
+     
    ]%string
   ++ map (fun '(s, p) => (s, map_prim_constructor Oasm p)) prim_string.
 

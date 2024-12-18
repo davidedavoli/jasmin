@@ -282,6 +282,12 @@ Section CHECK_SLHO.
 
     | SLHprotect_ptr_fail _ => (* fail should not be used at this point *)
       ok (Env.after_assign_vars env (vrv (get_lv lvs 0)))
+
+    | SLHdfence _ =>
+      ok (Env.after_assign_vars env (vrv (get_lv lvs 0)))
+
+    | SLHdfence_ptr _ =>
+      ok (Env.after_assign_vars env (vrv (get_lv lvs 0)))
     end.
 
   Variant slh_t :=

@@ -854,8 +854,17 @@ Definition is_protect_ptr_fail (rs:lvals) (o:sopn) (es:pexprs) :=
   | _, _, _ => None
   end.
 
+Definition is_dfence_ptr (rs:lvals) (o:sopn) (es:pexprs) :=
+  match o, rs, es with
+  | Oslh (SLHdfence_ptr _), [::r], [:: e] => Some (r, e)
+  | _, _, _ => None
+  end.
+
 Definition lower_protect_ptr_fail ii lvs t es :=
   slh_lowering.lower_slho shparams ii lvs t (SLHprotect Uptr) es.
+
+Definition lower_dfence_ptr ii lvs t es :=
+  slh_lowering.lower_slho shparams ii lvs t (SLHdfence Uptr) es.
 
 (* This seems to be a duplication of alloc_array_move, but we are able to share the corresponding proofs *)
 Definition alloc_protect_ptr rmap ii r t e msf :=
@@ -896,6 +905,51 @@ Definition alloc_protect_ptr rmap ii r t e msf :=
         let dx := Lvar (with_var x px) in
         Let msf := add_iinfo ii (alloc_e rmap msf (sword msf_size)) in
         Let ir := lower_protect_ptr_fail ii [::dx] t [:: ey; msf] in
+        let rmap := Region.set_move rmap x sry bytesy in
+        ok (rmap, ir)
+      | _ => Error (stk_error_no_var "only reg ptr can receive the result of protect_ptr")
+      end
+    end
+  | Some _ => Error (stk_error_no_var "cannot assign protect_ptr in a sub array" )
+  end.
+
+Definition alloc_dfence_ptr rmap ii r t e :=
+  Let xsub := get_Lvar_sub r in
+  Let ysub := get_Pvar_sub e in
+  let '(x,subx) := xsub in
+  let '(y,suby) := ysub in
+
+   Let sryl :=
+    let vy := y.(gv) in
+    Let vk := get_var_kind y in
+    let ofs := 0%Z in
+    Let len :=
+      match suby with
+      | None => ok (size_slot vy)
+      | Some _ => Error (stk_error_no_var "argument of protect_ptr cannot be a sub array" )
+      end in
+    match vk with
+    | None => Error (stk_error_no_var "argument of protect_ptr should be a reg ptr")
+    | Some vpk =>
+      Let _ := assert (if vpk is VKptr (Pregptr _) then true else false)
+                      (stk_error_no_var "argument of protect_ptr should be a reg ptr") in
+      Let _ := assert (if r is Lvar _ then true else false)
+                      (stk_error_no_var "destination of protect_ptr should be a reg ptr") in
+      Let: (_, sry, bytesy) := check_vpk rmap vy vpk (Some ofs) len in
+      Let: (e, _ofs) := mk_addr_pexpr rmap vy vpk in (* ofs is ensured to be 0 *)
+      ok (sry, bytesy, vpk, e)
+    end
+  in
+  let '(sry, bytesy, vpk, ey) := sryl in
+  match subx with
+  | None =>
+    match get_local (v_var x) with
+    | None    => Error (stk_error_no_var "only reg ptr can receive the result of protect_ptr")
+    | Some pk =>
+      match pk with
+      | Pregptr px =>
+        let dx := Lvar (with_var x px) in
+        Let ir := lower_dfence_ptr ii [::dx] t [:: ey] in
         let rmap := Region.set_move rmap x sry bytesy in
         ok (rmap, ir)
       | _ => Error (stk_error_no_var "only reg ptr can receive the result of protect_ptr")
@@ -1222,6 +1276,10 @@ Fixpoint alloc_i sao (rmap:region_map) (i: instr) : cexec (region_map * cmd) :=
       if is_protect_ptr_fail rs o e is Some (r, e, msf) then
          Let rs := alloc_protect_ptr rmap ii r t e msf in
          ok (rs.1, [:: MkI ii rs.2])
+      else
+        if is_dfence_ptr rs o e is Some (r, e) then
+        Let rs := alloc_dfence_ptr rmap ii r t e in
+            ok (rs.1, [:: MkI ii rs.2])
       else
       if is_swap_array o then
         Let rs := add_iinfo ii (alloc_array_swap rmap rs t e) in

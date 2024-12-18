@@ -5,7 +5,7 @@ open Utils
 
 let parse_and_check arch call_conv =
   let module A = (val get_arch_module arch call_conv) in
-  let check ~doit infer ct_list speculative pass file =
+  let check ~doit infer ct_list speculative dfence pass file =
     let prog = parse_and_compile (module A) pass file in
 
     if speculative then
@@ -15,6 +15,14 @@ let parse_and_check arch call_conv =
       | sigs ->
           Format.printf "/* Security types:\n@[<v>%a@]*/@."
             (pp_list "@ " Sct_checker_forward.pp_funty)
+            sigs
+    else if dfence then
+      match Dfence_checker_forward.ty_prog (A.is_ct_sopn ~doit) prog ct_list with
+      | exception Annot.AnnotationError (loc, code) ->
+          hierror ~loc:(Lone loc) ~kind:"annotation error" "%t" code
+      | sigs ->
+          Format.printf "/* Security types:\n@[<v>%a@]*/@."
+            (pp_list "@ " Dfence_checker_forward.pp_funty)
             sigs
     else
       let sigs, errs =
@@ -28,14 +36,14 @@ let parse_and_check arch call_conv =
       in
       Stdlib.Option.iter on_err errs
   in
-  fun infer ct_list speculative compile file doit warn ->
+  fun infer ct_list speculative dfence compile file doit warn ->
     if not warn then nowarning ();
     let compile =
       if doit && compile < Compiler.PropagateInline then
         Compiler.PropagateInline
       else compile
     in
-    match check ~doit infer ct_list speculative compile file with
+    match check ~doit infer ct_list speculative dfence  compile file with
     | () -> ()
     | exception HiError e ->
         Format.eprintf "%a@." pp_hierror e;
@@ -48,6 +56,10 @@ let infer =
 let speculative =
   let doc = "Check for S-CT" in
   Arg.(value & flag & info [ "speculative"; "sct" ] ~doc)
+
+let dfence =
+  let doc = "Check for S-CT using dfence" in
+  Arg.(value & flag & info [ "dfence"; "df" ] ~doc)
 
 let slice =
   let doc =
@@ -80,6 +92,6 @@ let () =
   in
   Cmd.v info
     Term.(
-      const parse_and_check $ arch $ call_conv $ infer $ slice $ speculative
+      const parse_and_check $ arch $ call_conv $ infer $ slice $ speculative $ dfence
       $ after_pass $ file $ doit $ warn)
   |> Cmd.eval |> exit

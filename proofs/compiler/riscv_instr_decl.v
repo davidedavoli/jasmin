@@ -149,6 +149,9 @@ Variant riscv_op : Type :=
 | DIVU                           (* Divides two unsigned registers *)
 | REM                            (* Remainder for two signed registers *)
 | REMU                           (* Remainder for two unsigned registers *)
+
+(* RISC-V SPECIFIC instruction for DFENCE *)
+| DFENCE   
 .
 
 Scheme Equality for riscv_op.
@@ -554,6 +557,38 @@ Definition riscv_remu_semi (wn wm: ty_r) : ty_r := wmod wn wm.
 Definition riscv_REMU_instr : instr_desc_t := RTypeInstruction riscv_remu_semi "REMU" "remu".
 Definition prim_REMU := ("REMU"%string, primM REMU).
 
+(* RISC-V DFENCE *)
+
+(* Pseudo instruction : Other data processing instructions *)
+Definition riscv_DFENCE_semi (wn : ty_r) : ty_r :=
+  wn.
+
+Definition riscv_DFENCE_instr : instr_desc_t :=
+  let tin := [:: sreg ] in
+  let semi := riscv_DFENCE_semi in
+    {|
+      id_valid := true;
+      id_msb_flag := MSB_MERGE;
+      id_tin := tin;
+      id_in := [:: Ea 1 ];
+      id_tout := [:: sreg ];
+      id_out := [:: Ea 0 ];
+      id_semi := sem_prod_ok tin semi;
+      id_nargs := 2;
+      id_args_kinds := ak_reg_reg;
+      id_eq_size := refl_equal;
+      id_tin_narr := refl_equal;
+      id_tout_narr := refl_equal;
+      id_check_dest := refl_equal;
+      id_str_jas := pp_s "dfence";
+      id_safe := [::];
+      id_pp_asm := pp_name "df";
+      id_safe_wf := refl_equal;
+      id_semi_errty := fun _ => (@sem_prod_ok_error _ tin semi ErrType);
+      id_semi_safe := fun _ => (@values.sem_prod_ok_safe _ tin semi);
+    |}.
+
+
 
 (* -------------------------------------------------------------------- *)
 (* Description of instructions. *)
@@ -594,6 +629,7 @@ Definition riscv_instr_desc (mn : riscv_op) : instr_desc_t :=
   | DIVU => riscv_DIVU_instr
   | REM => riscv_REM_instr
   | REMU => riscv_REMU_instr
+  | DFENCE => riscv_DFENCE_instr
   end.
 
 Definition riscv_prim_string : seq (string * prim_constructor riscv_op) := [::

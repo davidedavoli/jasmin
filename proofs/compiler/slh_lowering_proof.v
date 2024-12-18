@@ -611,6 +611,32 @@ Section LOWER_SLHO.
     split => //; apply: wf_env_after_assign_vars1; eauto.
   Qed.
 
+  (* [wf_env_cond]: we either drop or leave the condition as is.
+     [wf_env_vars]: we remove [x] from the MSF variables. *)
+  Lemma lower_SLHdfence ws : lower_slho_correct (SLHdfence ws).
+  Proof.
+    move=> s s' ii lvs es args res env env' hwf.
+    rewrite /exec_sopn /=; t_xrbindP.
+    case: args => //=; t_xrbindP => v1 [] //=; t_xrbindP => /=.
+    case: es => //=; t_xrbindP => e1; t_xrbindP.
+  Admitted.
+  
+  Lemma lower_SLHdfence_ptr sz : lower_slho_correct (SLHdfence_ptr sz).
+  Proof.
+  Admitted.
+  
+  (*  move=> s s' ii lvs es args res env env' hwf.
+    rewrite /exec_sopn /=; t_xrbindP.
+    case: args => //=; t_xrbindP => v1 [] //=; t_xrbindP => v2 [] //=.
+    case: es => //=; t_xrbindP => e1 [] //= e2; t_xrbindP.
+    move=> es /(check_e_msfP _ hwf) -> <- v1' he1 ? _ [<-] vs _ <- ? [] <- ?; subst v1' vs.
+    move=> t1 t2 ht _ /truncate_wordP [_ ->] [<-] <-.
+    case: lvs => //= lv; t_xrbindP => -[] //= s'' hw [?]; subst s''.
+    split; last by apply: wf_env_after_assign_vars1; eauto.
+    by eexists; [reflexivity | rewrite /to_word truncate_word_u].
+  Qed.
+*)
+  
   Lemma lower_slhoP s s' ii lvs slho es args res op' lvs' es' env env' :
     wf_env env (p_globs p') s
     -> check_slho ii lvs slho es env = ok env'
@@ -629,14 +655,16 @@ Section LOWER_SLHO.
          apply: (hshp_spec_lower hshparams) hsemes hexec hwrite.
     move: hwf hcheck hsemes hexec hwrite.
     clear.
-    case: slho => [|||ws|sz|sz].
+    case: slho => [|||ws|sz|sz|ws|sz].
     - exact: lower_SLHinit.
     - exact: lower_SLHupdate.
     - exact: lower_SLHmove.
     - exact: lower_SLHprotect.
-    - exact: lower_SLHprotect_ptr.
-    exact: lower_SLHprotect_ptr_fail.
-  Qed.
+    - exact: lower_SLHprotect_ptr.    
+    - exact: lower_SLHprotect_ptr_fail.
+  (*  - apply lower_SLHdfence.
+    - exact: lower_SLHdfence_ptr.      *)
+  Admitted.
 
   Definition slh_t_spec (v:value) (ty:slh_t) :=
     if ty is Slh_msf then v = (@Vword msf_size 0%R)
