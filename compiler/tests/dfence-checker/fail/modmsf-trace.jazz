@@ -1,0 +1,19 @@
+inline
+fn kill_msf(reg u32 x) {
+    if (x != 0) {
+        [x] = 0;
+    }
+}
+
+inline
+fn f1(reg u32 x) { kill_msf(x); }
+
+inline
+fn f2(reg u32 x) { f1(x); }
+
+fn modmsf_trace(reg u32 x) -> reg u32 {
+  _ = #init_msf();
+  f2(x);
+  x = #dfence(x);
+  return x;
+}

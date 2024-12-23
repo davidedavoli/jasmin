@@ -1,0 +1,18 @@
+// fn for_inference_bug1() {
+//     inline int i;
+//     for i = 0 to 1 {
+//         _ = #init_msf();
+//     }
+// }
+
+fn for_inference_bug2(#transient reg u32 x) -> #public reg u32 {
+    // _ = #init_msf();
+
+    // inline int i;
+    // for i = 0 to 1 {
+    //     _ = #init_msf();
+    // }
+
+    x = #dfence(x);
+    return x;
+}

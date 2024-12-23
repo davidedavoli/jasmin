@@ -1,0 +1,21 @@
+// This should kill the MSFs even if the outer if is inline.
+inline
+fn f(reg u32 a) -> reg u32 {
+    #inline
+    if (true) {
+        if (a == 0) {
+            a = 0;
+        }
+    }
+    return a;
+}
+
+export
+fn inline_if_modmsf(reg u32 a) {
+  _ = #init_msf();
+
+  a = f(a);
+
+  a = #dfence(a);
+  [a] = a;
+}

@@ -1,0 +1,12 @@
+inline
+fn reset(stack u32 t) {
+  [t] = 0;
+}
+
+export
+fn main(reg u32 x) {
+  _ = #init_msf();
+  stack u32 s;
+  s = x;
+  reset(s);
+}

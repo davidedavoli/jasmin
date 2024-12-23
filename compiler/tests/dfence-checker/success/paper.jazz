@@ -1,0 +1,221 @@
+/* These examples are the one featured in the S&P 2023 paper,
+    “Typing High-Speed Cryptography against Spectre v1”
+*/
+param int N = 20;
+
+#[sct =
+  "{ ptr: transient, val: transient } * { ptr: transient, val: secret } * transient -> { ptr: public, val: secret }"
+]
+// ct = "public * secret * public -> secret"
+fn fig3a(
+  reg const ptr u32[N] p,
+  reg mut ptr u32[N] w,
+  reg u32 i)
+  ->  reg mut ptr u32[N] {
+  reg u32 x;
+  reg bool b;
+   _ = #init_msf();
+  b = i < N;
+  if b {
+    x = p[i];
+    x = #dfence(x);
+  } 
+  w[x] = 0;
+  return w;
+}
+
+#[sct = "
+{ ptr: transient, val: transient } * { ptr: transient, val: { n: w, s: secret } } * { ptr: transient, val: secret } * transient * secret
+-> { ptr: public, val: { n: w, s: secret } } * { ptr: public, val: secret }
+"]
+// ct = "public * w * secret * public * secret → w * secret"
+fn fig3b(
+  reg const ptr u32[N] p,
+  reg mut ptr u32[N] w,
+  reg mut ptr u32[N] s,
+  reg u32 i,
+  reg u32 secret)
+  -> reg mut ptr u32[N]
+  ,  reg mut ptr u32[N] {
+  reg u32 x;
+  reg bool b;
+   _ = #init_msf();
+  b = i < N;
+  if b {
+    s[i] = secret;
+  } 
+  x = p[0];
+  x = #dfence(x);
+  w[x] = 0;
+  return w, s;
+}
+
+#[ sct = "
+  { ptr: public, val: secret } * { ptr: public, val: secret } -> { ptr: public, val: secret }
+"]
+fn fig4a(
+  reg mut ptr u32[N] msg,
+  reg const ptr u32[N] key
+) -> reg mut ptr u32[N] {
+  reg u32 i t1 t2;
+  i = 0;
+  while (i < N) {
+    t1 = msg[(int) i];
+    t2 = key[(int) i];
+    t1 ^= t2;
+    msg[(int) i] = t1;
+    i += 1;
+  }
+  return msg;
+}
+
+#[sct = "
+  { ptr: transient, val: secret } * { ptr: transient, val: secret } -> { ptr: public, val: secret }
+"]
+fn fig4b(
+  reg mut ptr u32[N] msg,
+  reg const ptr u32[N] key
+) -> reg mut ptr u32[N] {
+  reg u32 i t1 t2;
+  _ = #init_msf();
+  i = 0;
+  while (i < N) {
+    t1 = msg[(int) i];
+    t1 = #dfence(t1);
+    t2 = key[(int) i];
+    t2 = #dfence(t2);
+    t1 ^= t2;
+    msg[(int) i] = t1;
+    i += 1;
+  }
+  return msg;
+}
+
+#[sct = "
+  { ptr: transient, val: secret } * { ptr: transient, val: secret } -> { ptr: public, val: secret }
+"]
+fn fig4c(
+  reg mut ptr u32[N] msg,
+  reg const ptr u32[N] key
+) -> reg mut ptr u32[N] {
+  reg u32 ms i t1 t2;
+  _ = #init_msf();
+  i = 0;
+  while (i < N) {
+    t1 = msg[(int) i];
+    t2 = key[(int) i];
+    t1 ^= t2;
+    msg[(int) i] = t1;
+    i += 1;
+  }
+  return msg;
+}
+
+#[sct = "
+  { ptr: public, val: { normal: d, speculative: secret } } -> { normal: d, speculative: d }
+"]
+fn fig5a(
+  reg const ptr u32[N] p
+) -> reg u32 {
+  reg u32 i s t;
+  s = 0;
+  i = 0;
+  while (i < N) {
+    t = p[i];
+    s += t;
+    i += 1;
+  }
+  return s;
+}
+
+#[sct = "
+  { ptr: transient, val: d } -> d
+"]
+fn fig5b(reg const ptr u32[N] p) -> reg u32 {
+  reg u32 i s t;
+  _ = #init_msf();
+  s = 0;
+  i = 0;
+  while (i < N) {
+    t = p[(int) i];
+    t = #dfence(t);
+    s += t;
+    i += 1;
+  }
+  return s;
+}
+
+#[sct = "
+  { ptr: transient, val: d } -> d
+"]
+fn fig5c(reg const ptr u32[N] p) -> reg u32 {
+  reg u32 i s t;
+  _ = #init_msf();
+  s = 0;
+  i = 0;
+  while (i < N) {
+    t = p[(int) i];
+    s += t;
+    i += 1;
+  }
+  s = #dfence(s);
+  return s;
+}
+
+/* This is too challenging for an automated low-level checker
+fn fig5d(
+  reg const ptr u32[N] p
+) -> reg u32 {
+  reg u32 i s t;
+  _ = #init_msf();
+  s = 0;
+  i = 0;
+  while (i < N) {
+    t = p[(int) i];
+    s += t;
+    i += 1;
+  }
+  s = #dfence(s);
+  return s;
+}
+*/
+
+#[sct = "
+  { ptr: transient, val: secret } * { ptr: transient, val: transient } * transient -> public * { ptr: public, val: secret }
+"]
+fn fig6a(
+  reg mut ptr u32[N] s,
+  reg const ptr u32[N] p,
+  reg u32 i pub_v
+) -> reg u32, reg mut ptr u32[N] {
+  reg u32 ms x;
+  reg bool b;
+  _ = #init_msf();
+  b = 0 < N;
+  if b {
+    s[(int) 0] = pub_v;
+  }
+  x = p[5];
+  return x, s;
+}
+
+#[sct = "
+  { ptr: transient, val: secret } * { ptr: transient, val: transient } * transient * secret -> public * { ptr: public, val: secret }
+"]
+fn fig6b(
+  reg mut ptr u32[N] s,
+  reg const ptr u32[N] p,
+  reg u32 cond,
+  reg u32 sec_v
+) -> reg u32, reg mut ptr u32[N] {
+  reg u32 ms x;
+  reg bool b;
+  _ = #init_msf();
+  b = cond != 0;
+  if b {
+    s[3] = sec_v;
+  }
+  x = p[5];
+  x = #dfence(x);
+  return x, s;
+}

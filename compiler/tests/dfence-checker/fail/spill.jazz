@@ -1,0 +1,12 @@
+fn spill2(
+    #public reg u64 pub,
+    #secret reg u64 sec
+) ->
+    #public reg u64
+{
+    () = #spill(pub, sec);
+    [pub] = sec;
+    () = #unspill(pub, sec);
+    [pub] = sec;
+    return pub;
+}

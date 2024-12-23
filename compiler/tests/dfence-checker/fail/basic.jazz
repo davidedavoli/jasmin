@@ -1,0 +1,72 @@
+fn leak_transient(#transient reg u32 x) { x = [x]; }
+
+u32[2] not = { 1, 0 };
+
+fn after_branch(#transient reg u32 a){
+  _ = #init_msf();
+  if a >= 2 { a = 0; }
+  a = not[a];
+  a = #dfence(a);
+}
+
+fn missing_else(#transient reg u32 a){
+  reg bool b;
+  reg u32 m;
+  _ = #init_msf();
+  b = a >= 2;
+  if b {
+    a = m;
+  }
+  a = not[(int) a];
+  a = #dfence(a);
+}
+
+fn missing_then(#transient reg u32 a){
+  reg u32 m;
+  reg bool b;
+  _ = #init_msf();
+  b = a >= 2;
+  if b {
+    a = m;
+  }
+  a = not[(int) a];
+  a = #dfence(a);
+}
+
+#[sct="public × { ptr: public, val: transient } × { ptr: public, val: secret } → { ptr: public, val: transient }"]
+fn xof_init(
+  reg u32 j,
+  reg ptr u32[25] state,
+  reg ptr u8[32] rho)
+  ->
+  reg ptr u32[25]
+{
+  reg u32 t;
+  t = rho[u32 j];
+  state[j] = t;
+  return state;
+}
+
+
+fn outdated_msf(reg u32 x) ->  reg u32 {
+  // _ = #init_msf();
+  if x > 0 {
+    x = 0;
+  }
+  return x;
+}
+
+fn missing_update_after_loop( reg u32 x) -> reg u32 {
+  _ = #init_msf();
+  while (x > 0) {
+    x -= 1;
+  }
+  x = #dfence(x);
+  return x;
+}
+
+fn missing_update_in_loop(reg u32 x)  {
+  while (x > 0) {
+    x -= 1;
+  }
+}

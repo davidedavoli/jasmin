@@ -1,0 +1,16 @@
+fn reset_msf() -> #msf reg u32 {
+  reg u32 msf;
+  msf = #init_msf();
+  return msf;
+}
+
+fn main(reg u32 x) {
+  stack u32[1] tab;
+  _ = #init_msf();
+  tab[0] = 0;
+  if x < 1 {
+    x = tab[x];
+    x = #dfence(x);
+    [x] = 0;
+  }
+}

@@ -1,0 +1,104 @@
+export fn nothing(#transient reg u32 a) -> #public reg u32 {
+  _ = #init_msf();
+  return a;
+}
+
+export fn secret(#secret reg u32 a) -> #secret reg u32 {
+  return a;
+}
+
+export fn branch(#transient reg u32 a, #secret reg u32 b c) -> #secret reg u32 {
+  reg u32 r;
+  _ = #init_msf();
+  if a == 0 {
+    r = b;
+  } else {
+    r = c;
+  }
+  return c;
+}
+
+export fn branchless(#transient reg u32 a, #secret reg u32 b c) -> #secret reg u32 {
+  c = b if a == 0;
+  return c;
+}
+
+u32[2] not = { 1, 0 };
+
+export fn forloop(#transient reg u32 a) -> #public reg u32 {
+  reg u32 msf t;
+  inline int i;
+  msf = #init_msf();
+  for i = 0 to 2 {
+    t = not[i];
+    t = #dfence(t); // TODO: this protect should not be needed
+    a ^= t;
+  }
+  return a;
+}
+
+// export fn whileloop(#transient reg u32 a) -> #public reg u32 {
+//   reg u32 msf t i;
+//   msf = #init_msf();
+//   ?{}, i = #set0();
+//   while (i < 2) {
+//     msf = #update_msf(i < 2, msf);
+//     t = not[(int) i];
+//     t = #dfence(t);
+//     a ^= t;
+//     i += 1;
+//   }
+//   return a;
+// }
+
+export fn archetype(#transient reg u32 i) -> #transient reg u32 {
+  reg u32 msf r t;
+  msf = #init_msf();
+  r = 0;
+  if i < 2 {
+    t = not[(int) i];
+    t = #dfence(t);
+    r = not[(int) t];
+  }
+  return r;
+}
+
+export fn load(#transient reg u32 p i)
+-> #public reg u32 {
+  reg u32 msf r t;
+  reg bool b;
+  msf = #init_msf();
+  r = 0;
+  b = i < 2;
+  if b {
+    t = [p + 8 * i];
+    #declassify r = t;
+    r = #dfence(r);
+  }
+  return r;
+}
+
+export fn store(#transient reg u32 p i q, #secret reg u32 v) {
+  reg u32 j;
+   _ = #init_msf();
+  if i < 2 {
+    j = [p + 8 * i];
+    #declassify j = j;
+    j = #dfence(j);
+    [q + 8 * j] = v;
+  }
+}
+
+#[sct="public * { ptr: public, val: transient } * { ptr: public, val: secret } -> { ptr: public, val: secret }"]
+fn xof_init(
+  reg u32 j,
+  reg ptr u32[25] state,
+  reg ptr u8[32] rho)
+  ->
+  reg ptr u32[25]
+{
+  reg u32 t;
+  t = rho[u32 j];
+  state[j] = t;
+  return state;
+}

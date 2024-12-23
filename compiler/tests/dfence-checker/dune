@@ -1,0 +1,28 @@
+(library
+  (name common)
+  (wrapped false)
+  (libraries jasmin.jasmin)
+  (modules common))
+
+(tests
+  (libraries jasmin.jasmin common)
+  (deps
+    error_messages.jazz)
+  (modules sct_errors)
+  (names
+    sct_errors))
+
+(tests
+  (libraries jasmin.jasmin common)
+  (deps
+    (glob_files success/*)
+    (glob_files fail/*))
+  (modules accept reject)
+  (names
+    accept reject))
+
+(tests
+  (libraries jasmin.jasmin angstrom)
+  (modules sct_annot)
+  (names
+    sct_annot))

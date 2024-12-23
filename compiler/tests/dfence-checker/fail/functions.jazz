@@ -1,0 +1,12 @@
+inline fn leak(#public reg u32 c) { if c != 0 {} }
+
+u8[6] g = "jasmin";
+
+fn call_kills_msf(#transient reg u32 c) -> #public reg u32 {
+  reg u32 x;
+  _ = #init_msf();
+  x = g[u32 (int) c];
+  leak(0);
+  x = #dfence(x);
+  return x;
+}
