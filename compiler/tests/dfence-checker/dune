@@ -1,5 +1,5 @@
 (library
-  (name common)
+  (name common_df)
   (wrapped false)
   (libraries jasmin.jasmin)
   (modules common))
