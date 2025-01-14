@@ -172,17 +172,11 @@ Definition riscv_sh_lower
   (* | SLHinit  | SLHupdate  | SLHmove | SLHprotect _  *)
   | SLHinit   => Some (lvs, Oext Oriscv_SLHinit, es)
 
-  | SLHupdate => Some (Lnone dummy_var_info ty_msf :: lvs, Oext Oriscv_SLHupdate, es)
+  | SLHupdate => Some (lvs, Oext Oriscv_SLHupdate, es)
 
   | SLHmove   => Some (lvs, Oext Oriscv_SLHmove, es)
 
   | SLHprotect ws => Some (lvs, Oext (Oriscv_SLHprotect ws), es)
-    (* let: (rk, extra) := *)
-    (*   if (ws <= U64)%CMP *)
-    (*   then if is_mmx_protect ws lvs then (Extra, [::]) else (Normal, lflags) *)
-    (*   else (Normal, [:: Lnone dummy_var_info (sword ws) ]) *)
-    (* in *)
-    (* Some (extra ++ lvs, O (Ox86SLHprotect rk ws), es) *)
 
   | SLHprotect_ptr _ | SLHprotect_ptr_fail _ => None
                                                   

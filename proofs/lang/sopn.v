@@ -316,6 +316,8 @@ Definition pseudo_op_get_instr_desc (o : pseudo_operator) : instruction_desc :=
    Since at source level we do not take into account speculative execution,
    the protect/protect_ptr are simply the identity *)
 
+Definition se_fence_sem : sem_tuple [::] := tt.
+
 Definition se_init_sem : wmsf := 0%R.
 
 Definition se_update_sem (b : bool) (msf : wmsf) : wmsf :=
@@ -343,6 +345,16 @@ Definition SLHinit_instr :=
       [:: ty_msf ]
       [:: E 0 ]      (* this info is irrelevant *)
       se_init_sem
+      true.
+
+Definition SLHfence_str := "fence"%string.
+Definition SLHfence_instr := 
+  mk_instr_desc_safe (pp_s SLHfence_str)
+      [::]
+      [::]           (* this info is irrelevant *)
+      [::]
+      [::]      (* this info is irrelevant *)
+      se_fence_sem
       true.
 
 Definition SLHupdate_str := "update_msf"%string.
@@ -508,6 +520,7 @@ Definition slh_op_instruction_desc  (o : slh_op) : instruction_desc :=
   | SLHprotect ws         => SLHprotect_instr ws
   | SLHprotect_ptr p      => SLHprotect_ptr_instr p
   | SLHprotect_ptr_fail p => SLHprotect_ptr_fail_instr p
+  | SLHfence              => SLHfence_instr 
   | SLHdfence ws          => SLHdfence_instr ws
   | SLHdfence_ptr p       => SLHdfence_ptr_instr p
   end.
@@ -558,8 +571,9 @@ Definition sopn_prim_string : seq (string * prim_constructor sopn) :=
     ("mov_msf"    , primM (Oslh SLHmove));
     ("protect"    , primP (fun sz => Oslh (SLHprotect sz)));
     ("protect_ptr", primM (Oslh (SLHprotect_ptr xH))); (* The size is fixed later *)
-    ("dfence"    , primP (fun sz => Oslh (SLHdfence sz)));
-    ("dfence_ptr", primM (Oslh (SLHdfence_ptr xH))) (* The size is fixed later *)
+    ("fence"      , primM (Oslh SLHfence));
+    ("dfence"     , primP (fun sz => Oslh (SLHdfence sz)));
+    ("dfence_ptr" , primM (Oslh (SLHdfence_ptr xH))) (* The size is fixed later *)
      
    ]%string
   ++ map (fun '(s, p) => (s, map_prim_constructor Oasm p)) prim_string.

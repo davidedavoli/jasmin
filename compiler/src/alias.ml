@@ -190,6 +190,7 @@ let link_array_return params a xs es cc =
 let opn_cc o = 
   match o with
   | Sopn.Oslh (SLHprotect_ptr_fail _) -> Some [Some 0]
+  | Sopn.Oslh (SLHdfence_ptr _) -> Some [Some 0]
   | Sopn.Opseudo_op(Pseudo_operator.Oswap _) -> Some [Some 1; Some 0]
   | _ -> None 
 

@@ -20,6 +20,7 @@ Variant slh_op :=
   | SLHprotect of wsize
   | SLHprotect_ptr of positive
   | SLHprotect_ptr_fail of positive  (* Not exported to the user *)
+  | SLHfence
   | SLHdfence of wsize
   | SLHdfence_ptr of positive.
             

@@ -47,6 +47,9 @@ Context
   {reg regx xreg rflag cond : Type}
   {ad : arch_decl reg regx xreg rflag cond}.
 
+Definition ak_none : i_args_kinds :=
+    [:: [:: [::] ] ].
+
 Definition ak_reg : i_args_kinds :=
     [:: [:: [:: CAreg ] ] ].
 

@@ -21,6 +21,10 @@ Local Notation E n := (sopn.ADExplicit n None).
 
 Variant riscv_extra_op : Type :=  
   | SWAP of wsize
+  | Oriscv_SLHinit
+  | Oriscv_SLHmove
+  | Oriscv_SLHupdate
+  | Oriscv_SLHprotect  of wsize
   | Oriscv_add_large_imm.
 
 Scheme Equality for riscv_extra_op.
@@ -38,6 +42,57 @@ HB.instance Definition _ := hasDecEq.Build riscv_extra_op riscv_extra_op_eq_axio
 #[ export ]
 Instance eqTC_riscv_extra_op : eqTypeC riscv_extra_op :=
   { ceqP := riscv_extra_op_eq_axiom }.
+
+Definition Oriscv_SLHinit_str := append "Oriscv_" SLHinit_str.
+Definition Oriscv_SLHinit_instr :=
+  mk_instr_desc_safe (pp_s Oriscv_SLHinit_str)
+      [::]
+      [::]
+      [:: ty_msf ]
+      [:: E 0 ]
+      se_init_sem
+      true.
+
+
+Definition riscv_se_update_sem (b:bool) (w: wmsf) : wmsf * wmsf :=
+  let aux :=  wrepr Uptr (0) in
+  let w := if ~~b then aux else w in
+  (aux, w).
+
+Definition Oriscv_SLHupdate_str := append "Oriscv_" SLHupdate_str.
+Definition Oriscv_SLHupdate_instr :=
+  mk_instr_desc_safe (pp_s Oriscv_SLHupdate_str)
+                [:: sbool; ty_msf]
+                [:: E 0; E 1]
+                [:: ty_msf; ty_msf]
+                [:: E 2; E 1]
+                riscv_se_update_sem
+                true.
+
+Definition Oriscv_SLHmove_str := append "Oriscv_" SLHmove_str.
+Definition Oriscv_SLHmove_instr :=
+  mk_instr_desc_safe (pp_s Oriscv_SLHmove_str)
+      [:: ty_msf ]
+      [:: E 1 ]
+      [:: ty_msf ]
+      [:: E 0 ]
+      se_move_sem
+      true.
+
+Definition Oriscv_SLHprotect_str := append "Ox86_" SLHprotect_str.
+Definition Oriscv_SLHprotect_instr  :=
+  let ty := sword riscv_reg_size in
+  let tin := [:: ty; ty] in
+  let semi := fun (x y : word riscv_reg_size) => (wand x  y) in
+  fun (ws:wsize) =>
+    (* if (ws <= Uptr)%CMP then *)
+      mk_instr_desc_safe (pp_sz SLHprotect_str ws)
+        tin
+        [:: E 1; E 2]
+        [::ty]
+        [:: E 0]
+        (semi)
+        true.
 
 (* [conflicts] ensures that the returned register is distinct from the first
    argument. *)
@@ -60,9 +115,14 @@ Definition Oriscv_add_large_imm_instr : instruction_desc :=
    ; i_semi_safe := fun _ => values.sem_prod_ok_safe (tin:=tin) semi
  |}.
 
+
 Definition get_instr_desc (o: riscv_extra_op) : instruction_desc :=
   match o with
   | SWAP ws => Oswap_instr (sword ws)
+  | Oriscv_SLHinit => Oriscv_SLHinit_instr
+  | Oriscv_SLHmove => Oriscv_SLHmove_instr
+  | Oriscv_SLHupdate => Oriscv_SLHupdate_instr
+  | Oriscv_SLHprotect ws => Oriscv_SLHprotect_instr ws
   | Oriscv_add_large_imm => Oriscv_add_large_imm_instr
    end.
   
@@ -109,14 +169,151 @@ Definition asm_args_of_opn_args
   : seq RISCVFopn_core.opn_args -> seq (asm_op_msb_t * lexprs * rexprs) :=
   map (fun '(les, aop, res) => ((None, aop), les, res)).
 
+
+  
+(* Definition assemble_slh_update *)
+(*   (ii : instr_info) *)
+(*   (les : seq lexpr) *)
+(*   (res : seq rexpr) : *)
+(*   cexec (seq (asm_op_msb_t * seq lexpr * seq rexpr)) := *)
+(*   if (les, res) is ([:: LLvar aux; ms0 ], [:: Rexpr b; msf ]) *)
+(*   then *)
+(*     Let _ := assert (~~(Sv.mem aux (free_vars b) || Sv.mem aux (free_vars_r msf)) && *)
+(*                      (vtype aux == sword U64)) *)
+(*                     (E.se_update_arguments ii) in *)
+(*     let res' := [:: Rexpr (Fapp1 Onot b); Rexpr (Fvar aux); msf ] in *)
+(*     ok *)
+(*       [:: *)
+(*          [:: LLvar aux ] ::= (MOV U64) [:: re_i U64 (-1) ]; *)
+(*                [:: ms0 ] ::= (CMOVcc U64) res' *)
+(*       ] *)
+(*   else *)
+(*     Error (E.se_update_arguments ii). *)
+
+Record SLH_condt := {
+  SLH_cond_kind : condition_kind;
+  SLH_cond_fst : option fexpr;
+  SLH_cond_snd : option fexpr;
+}.
+
+
+Definition SLH_condt_not (c : SLH_condt) : SLH_condt :=
+  let ck :=
+    match c.(SLH_cond_kind) with
+    | EQ => NE
+    | NE => EQ
+    | GE sg => LT sg
+    | LT sg => GE sg
+    end
+  in
+  {|
+    SLH_cond_kind:= ck;
+    SLH_cond_fst:= c.(SLH_cond_fst);
+    SLH_cond_snd:= c.(SLH_cond_snd);
+  |}
+.
+
+Definition SLH_assemble_cond_arg ii e : cexec (option fexpr) :=
+  match e with
+  | Fvar x => ok (Some e)
+  | Fapp1 (Oword_of_int U32) (Fconst 0) => ok None
+  | _ => Error (E.error ii "Can't assemble condition.")
+  end.
+
+(* Returns a condition_kind + a boolean describing if the arguments must be
+   swapped. *)
+
+Definition SLH_assemble_cond_app2 (o : sop2) :=
+  match o with
+  | Oeq (Op_w U32) => Some (EQ, false)
+  | Oneq (Op_w U32) => Some (NE, false)
+  | Olt (Cmp_w sg U32) => Some (LT sg, false)
+  | Oge (Cmp_w sg U32) => Some (GE sg, false)
+  | Ogt (Cmp_w sg U32) => Some (LT sg, true)
+  | Ole (Cmp_w sg U32) => Some (GE sg, true)
+  | _ => None
+  end.
+
+Fixpoint SLH_assemble_cond ii (e : fexpr) : cexec SLH_condt :=
+  match e with
+  | Fapp1 Onot e =>
+    Let c := SLH_assemble_cond ii e in ok (SLH_condt_not c)
+  | Fapp2 o e0 e1 =>
+    Let: (o, swap) :=
+      o2r (E.error ii "Could not match condition.") (SLH_assemble_cond_app2 o)
+    in
+    Let arg0 := SLH_assemble_cond_arg ii e0 in
+    Let arg1 := SLH_assemble_cond_arg ii e1 in
+    let: (arg0, arg1) := if swap then (arg1, arg0) else (arg0, arg1) in
+    ok {|
+      SLH_cond_kind := o;
+      SLH_cond_fst := arg0;
+      SLH_cond_snd := arg1;
+    |}
+  | _ =>
+      Error (E.error ii "Can't assemble condition.")
+  end.
+
+Definition SLH_eq_to_instr  (arg1: option fexpr) (arg2: option fexpr) out ii : cexec  (seq (asm_op_msb_t * lexprs * rexprs)):= 
+  match arg1 , arg2 with
+  | Some (Fvar x), Some (Fvar y) => ok [::
+                                          ((None, XOR), [:: LLvar out], [:: Rexpr (Fvar x); Rexpr (Fvar y)]);
+                                        ((None, SLTIU), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (Fconst (1))])]
+  | None, Some (Fvar x)
+  | Some (Fvar x), None => ok [::((None, SLTIU), [:: LLvar out], [:: Rexpr (Fvar x); Rexpr (Fconst (1))])]
+  | None, None => ok [::((None, LI), [:: LLvar out], [:: Rexpr (Fconst (1))])]
+  | _ , _=>
+      Error (E.error ii "Can't assemble condition.")
+  end.
+
+Definition SLH_lt_to_instr (sg: signedness) (arg1: option fexpr) (arg2: option fexpr) out ii : cexec  (seq (asm_op_msb_t * lexprs * rexprs)):=
+  let op := match sg with | Signed => SLT | Unsigned => SLTU end in
+  let opi := match sg with | Signed => SLT | Unsigned => SLTIU end in
+  match arg1 , arg2 with  
+  | Some (Fvar x), Some (Fvar y) => ok [::((None, op), [:: LLvar out], [:: Rexpr (Fvar x); Rexpr (Fvar y)])]
+  | None, Some (Fvar x) => ok [::
+                                 ((None, LI), [:: LLvar out], [:: Rexpr (Fconst (0))]);
+                                 ((None, opi), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (Fvar x)])]
+  | Some (Fvar x), None => ok [::
+                                 ((None, LI), [:: LLvar out], [:: Rexpr (Fconst (0))]);
+                                 ((None, opi), [:: LLvar out], [:: Rexpr (Fvar x); Rexpr (Fvar out)])]
+  | None, None => ok [::
+                        ((None, LI), [:: LLvar out], [:: Rexpr (Fconst (0))])
+                    ]
+  | _ , _=>
+      Error (E.error ii "Can't assemble condition.")
+  end.
+
+    
+Definition SLH_instr_combine (a: cexec  (seq (asm_op_msb_t * lexprs * rexprs))) (b: cexec  (seq (asm_op_msb_t * lexprs * rexprs))) :=
+  match a, b with
+  | (ok _  s), (ok _  t) => ok (cat s t)
+  | Error a, _ 
+  | _, Error a => Error a
+  end.
+
+Definition SLH_instr_not (out: var_i) : cexec (seq (asm_op_msb_t * lexprs * rexprs))  := (ok [:: ((None, SLTIU), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (Fconst (1))])]).
+
+Definition condt_to_instr (c: SLH_condt) out ii : cexec (seq (asm_op_msb_t * lexprs * rexprs)) := 
+  match c with
+  | {| SLH_cond_kind:= ck; SLH_cond_fst:= arg1; SLH_cond_snd:= arg2; |} =>
+      match ck with
+      | EQ => SLH_eq_to_instr arg1 arg2 out ii
+      | NE => SLH_instr_combine (SLH_eq_to_instr arg1 arg2 out ii) (SLH_instr_not out)
+      | LT sg => SLH_lt_to_instr sg arg1 arg2 out ii
+      | GE sg => SLH_instr_combine (SLH_lt_to_instr sg arg1 arg2 out ii) (SLH_instr_not out)
+      end
+end.
+ 
+
 Definition assemble_extra
            (ii: instr_info)
            (o: riscv_extra_op)
            (outx: lexprs)
            (inx: rexprs)
            : cexec (seq (asm_op_msb_t * lexprs * rexprs)) :=
-  match o with   
-  | SWAP sz =>
+  match o with
+  | SWAP sz =>  
     if (sz == U32)%CMP then
       match outx, inx with
       | [:: LLvar x; LLvar y], [:: Rexpr (Fvar z); Rexpr (Fvar w)] =>
@@ -127,7 +324,7 @@ Definition assemble_extra
           (E.internal_error ii "bad risc-v swap : y = x") in
         Let _ := assert (all (fun (x:var_i) => vtype x == sword U32) [:: x; y; z; w])
           (E.error ii "risc-v swap only valid for register of type u32") in
-
+              
         ok [:: ((None, XOR), [:: LLvar x], [:: Rexpr (Fvar z); Rexpr (Fvar w)]);
                (* x = z ^ w *)
                ((None, XOR), [:: LLvar y], [:: Rexpr (Fvar x); Rexpr (Fvar w)]);
@@ -138,6 +335,7 @@ Definition assemble_extra
       end
     else
       Error (E.error ii "risc-v swap only valid for register of type u32")
+            
   | Oriscv_add_large_imm =>
     match outx, inx with
     | [:: LLvar x], [:: Rexpr (Fvar y); Rexpr (Fapp1 (Oword_of_int ws) (Fconst imm))] =>
@@ -148,7 +346,55 @@ Definition assemble_extra
       ok (asm_args_of_opn_args (RISCVFopn_core.smart_addi x y imm))
     | _, _ =>
       Error (E.internal_error ii "bad riscv_add_large_imm: invalid args or dests")
-    end   
+    end
+
+  | Oriscv_SLHinit =>
+      match outx, inx with
+      (* alias for subi x  x0 1*)
+      (* wiz an alias for addi x  x0 -1*)
+      | [:: LLvar x], [::] =>
+          ok [:: ((None, FENCE), [::], [::]);
+              
+              ((None, LI), [:: LLvar x], [:: Rexpr (Fapp1 (Oword_of_int riscv_reg_size) (Fconst (-1)))])
+            ]
+      | _, _ => Error (E.error ii "Wrong parameters for msf_init in risc-v")
+      end
+
+  | Oriscv_SLHmove =>
+      match outx, inx with
+      | [:: LLvar x], [::Rexpr (Fvar y)] =>
+          ok[::
+              ((None, MV), [:: LLvar x], [:: Rexpr (Fvar y)])
+            ]
+      | _, _ => Error (E.error ii "Wrong parameters for mov_msf in risc-v")
+      end
+        
+  | Oriscv_SLHprotect ws =>
+      match outx, inx with
+      | [:: LLvar x], [:: Rexpr (Fvar y); Rexpr (Fvar z)] =>
+          ok[::
+               ((None, AND), [:: LLvar x], [:: Rexpr (Fvar y);  Rexpr (Fvar z)])
+            ]
+      | _, _ => Error (E.error ii "Wrong parameters for protect in risc-v")
+      end
+
+  | Oriscv_SLHupdate =>
+      match outx, inx with
+      | [:: LLvar aux; LLvar x], [:: Rexpr b; Rexpr (Fvar msf)] =>
+          Let _ := assert (~~(Sv.mem aux (free_vars b) || Sv.mem aux (free_vars_r (Rexpr (Fvar msf)))) &&
+                             (vtype aux == sword U32))
+                     (E.error ii "Wrong parameters for #update_msf in risc-v" ) in
+          match (SLH_assemble_cond ii b) with
+          | ok _ c =>  match condt_to_instr c aux ii with
+                       | (ok _  s) => ok (cat s [::((None, MUL), [:: LLvar x], [:: Rexpr (Fvar aux); Rexpr (Fvar msf)])])
+                       | Error e => Error e
+                       end
+          | Error e => Error e
+          end
+            
+      | _, _ => Error (E.error ii "Wrong parameters for update in risc-v")
+      end
+
   end.
 
 #[ export ]

@@ -286,6 +286,8 @@ Section CHECK_SLHO.
     | SLHdfence _ =>
       ok (Env.after_assign_vars env (vrv (get_lv lvs 0)))
 
+    | SLHfence => ok (env)
+
     | SLHdfence_ptr _ =>
       ok (Env.after_assign_vars env (vrv (get_lv lvs 0)))
     end.
@@ -481,6 +483,10 @@ Definition is_protect_ptr (slho : slh_op) :=
   if slho is SLHprotect_ptr p then Some p
   else None.
 
+Definition is_dfence_ptr (slho : slh_op) :=
+  if slho is SLHdfence_ptr p then Some p
+  else None.
+
 Definition lower_slho
   (ii : instr_info)
   (lvs : seq lval)
@@ -490,6 +496,8 @@ Definition lower_slho
   cexec instr_r :=
   if is_protect_ptr slho is Some p then
        ok (Copn lvs tg (Oslh (SLHprotect_ptr_fail p)) es)
+  else if is_dfence_ptr slho is Some p then
+       ok (Copn lvs tg (Oslh (SLHdfence_ptr p)) es)
   else if shp_lower shparams lvs slho es is Some args then
        ok (instr_of_copn_args tg args)
   else Error (E.lowering_failed ii).

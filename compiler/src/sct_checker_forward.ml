@@ -46,6 +46,7 @@ type special_op =
   | Update_msf
   | Mov_msf
   | Protect
+  | Fence
   | Dfence
   | Spill of Pseudo_operator.spill_op
   | Other
@@ -61,6 +62,7 @@ let is_special o =
     | SLHupdate -> Update_msf
     | SLHmove   -> Mov_msf
     | SLHprotect _ | SLHprotect_ptr _ -> Protect
+    | SLHfence -> Fence
     | SLHdfence _ | SLHdfence_ptr _ -> Dfence
     | SLHprotect_ptr_fail _ -> assert false
 
@@ -172,7 +174,7 @@ let rec modmsf_i fenv i =
     begin match is_special o with
     | Init_msf -> modified_here (* LFENCE modifies msf *)
     | Update_msf -> modified_here (* not sure it is needed *)
-    | Mov_msf | Protect | Dfence | Spill _ | Other -> NotModified
+    | Mov_msf | Protect | Fence | Dfence | Spill _ | Other -> NotModified
     end
   | Cfor(_, _, c) -> modmsf_c fenv c
   | Ccall (_, f, _) ->
@@ -362,6 +364,9 @@ let rec infer_msf_i ~withcheck fenv (tbl:(L.i_loc, Sv.t) Hashtbl.t) i ms =
 
     | Protect, _, _ -> assert false
 
+    |  Fence, _, _ ->
+       ms
+
     | Dfence, xs, _ ->
        checks ms xs;
        ms
@@ -408,6 +413,7 @@ module Env : sig
   val init_ty : env -> venv -> var -> vty -> venv
   val set_ty : env -> venv -> var_i -> vty -> venv
   val set_init_msf : env -> venv -> var_i option -> venv
+  val set_fence : env -> venv -> venv
 
   val max : env -> venv -> venv -> venv
 
@@ -550,6 +556,12 @@ end = struct
     in
     { venv with vtype = Mv.mapi operate_fence venv.vtype }
 
+  let set_fence env venv =
+    let operate_fence _ = function
+      | Direct le -> Direct (VlPairs.normalise le)
+      | Indirect(lp, le) -> Indirect(VlPairs.normalise lp, VlPairs.normalise le)
+    in
+      { venv with vtype = Mv.mapi operate_fence venv.vtype }
 
   let max env venv1 venv2 =
     let merge1 l1 l2 =
@@ -962,8 +974,8 @@ let ty_lval env ((msf, venv) as msf_e : msf_e) x ety : msf_e =
         msf, Env.corruption_speculative env venv le
 
   | Lasub(_, _, _, x, i) ->
-      ensure_public_address env venv (L.loc x) x;
-      ensure_public env venv (L.loc x) i;
+      (* ensure_public_address env venv (L.loc x) x; *)
+      (* ensure_public env venv (L.loc x) i; *)
       let le = content_ty ety in
       let l = Env.fresh2 env in
       let xty =
@@ -1049,6 +1061,8 @@ let rec ty_instr is_ct_asm fenv env ((msf,venv) as msf_e :msf_e) i =
       let venv = Env.set_init_msf env venv ms in
       let ms = Option.map_default MSF.exact1 MSF.toinit ms in
       ms, venv
+
+    | Fence, _, _ -> msf, Env.set_fence env venv 
 
     | Init_msf, _, _ -> assert false
 
@@ -1352,12 +1366,10 @@ let init_constraint fenv f =
       | None ->
         begin match x.v_kind with
         | Const -> Env.dpublic env
-        | Stack Direct when is_local -> Direct (Env.fresh env, Env.secret env)
-        | Stack Direct -> Direct (Env.fresh2 env)
-        | Stack (Pointer _) when is_local -> Indirect((Env.fresh env, Env.secret env), Env.fresh2 env)
-        | Stack (Pointer _) -> Indirect(Env.fresh2 env, Env.fresh2 env)
-        | Reg (_, Direct) -> Direct (Env.fresh2 env)
-        | Reg (_, Pointer _) -> Indirect(Env.fresh2 env, Env.fresh2 env)
+        | (Stack Direct | Reg (_, Direct)) when is_local -> Direct (Env.secret2 env)
+        | Stack Direct | Reg (_, Direct) -> Direct (Env.fresh2 env)
+        | Stack (Pointer _) | Reg (_, Pointer _) when is_local -> Indirect(Env.secret2 env, Env.fresh2 env)
+        | Stack (Pointer _) | Reg (_, Pointer _) -> Indirect(Env.fresh2 env, Env.fresh2 env)
         | Inline -> Env.dpublic env
         | Global -> Env.dpublic env (* unsure *)
         end

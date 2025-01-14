@@ -1404,7 +1404,7 @@ end = struct
        | SLHprotect _ | SLHprotect_ptr _ ->
           let x, _msf = as_seq2 es in
           [ Some x ]
-       | SLHdfence _ | SLHdfence_ptr _ | SLHprotect_ptr_fail _ -> assert false
+       | SLHfence | SLHdfence _ | SLHdfence_ptr _ | SLHprotect_ptr_fail _ -> assert false
        end
     | _ ->
       debug (fun () ->

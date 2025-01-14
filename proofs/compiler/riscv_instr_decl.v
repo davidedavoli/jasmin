@@ -150,6 +150,8 @@ Variant riscv_op : Type :=
 | REM                            (* Remainder for two signed registers *)
 | REMU                           (* Remainder for two unsigned registers *)
 
+(* RISC-V FENCE *)
+| FENCE
 (* RISC-V SPECIFIC instruction for DFENCE *)
 | DFENCE   
 .
@@ -557,6 +559,77 @@ Definition riscv_remu_semi (wn wm: ty_r) : ty_r := wmod wn wm.
 Definition riscv_REMU_instr : instr_desc_t := RTypeInstruction riscv_remu_semi "REMU" "remu".
 Definition prim_REMU := ("REMU"%string, primM REMU).
 
+(* RISC-V FENCE *)
+
+Definition riscv_FENCE_semi  := tt.
+
+
+Notation mk_instr str_jas tin tout ain aout msb semi args_kinds nargs safe_cond valid pp_asm safe_wf semi_errty semi_safe :=
+ {|
+  id_valid      := valid;
+  id_msb_flag   := msb;
+  id_tin        := tin;
+  id_in         := ain;
+  id_tout       := tout;
+  id_out        := aout;
+  id_semi       := semi;
+  id_nargs      := nargs;
+  id_args_kinds := args_kinds;
+  id_eq_size    := refl_equal;
+  id_tin_narr   := refl_equal;
+  id_tout_narr  := refl_equal;
+  id_check_dest := refl_equal;
+  id_str_jas    := str_jas;
+  id_safe       := safe_cond;
+  id_pp_asm     := pp_asm;
+  id_safe_wf    := safe_wf;
+  id_semi_errty := semi_errty;
+  id_semi_safe  := semi_safe;
+|}.
+
+(* The definition of FENCE is almost copy/pasted from x86.*)
+(* TODO: Refactor. *)
+
+(* Can only be use for safe instruction *)
+Notation mk_instr_safe str_jas tin tout ain aout msb semi args_kinds nargs valid pp_asm :=
+  (mk_instr str_jas tin tout ain aout msb (sem_prod_ok tin semi) args_kinds nargs [::] valid pp_asm
+    refl_equal
+    (fun _ => (@sem_prod_ok_error _ tin semi ErrType))
+    (fun _ => (@values.sem_prod_ok_safe _ tin semi)))
+  (only parsing).
+
+(* Can only be use for safe instruction *)
+Notation mk_instr_pp name tin tout ain aout msb semi check nargs prc pp_asm :=
+  (mk_instr_safe (pp_s name%string) tin tout ain aout msb semi check nargs true pp_asm) (only parsing).
+
+
+Definition riscv_FENCE_instr : instr_desc_t :=
+  mk_instr_pp "LFENCE" [::] [::] [::] [::] MSB_CLEAR tt [:: [::] ] 0 (primM FENCE) (pp_name "fence").
+  (* let tin := [::] in *)
+  (* let semi := riscv_FENCE_semi in *)
+  (*   {| *)
+  (*     id_valid := true; *)
+  (*     id_msb_flag := MSB_MERGE; *)
+  (*     id_tin := tin; *)
+  (*     id_in := [::]; *)
+  (*     id_tout := [::]; *)
+  (*     id_out := [::]; *)
+  (*     id_semi := sem_prod_ok tin semi; *)
+  (*     id_nargs := 0; *)
+  (*     id_args_kinds := ak_none; *)
+  (*     id_eq_size := refl_equal; *)
+  (*     id_tin_narr := refl_equal; *)
+  (*     id_tout_narr := refl_equal; *)
+  (*     id_check_dest := refl_equal; *)
+  (*     id_str_jas := pp_s "fence"; *)
+  (*     id_safe := [::]; *)
+  (*     id_pp_asm := pp_name "fence"; *)
+  (*     id_safe_wf := refl_equal; *)
+  (*     id_semi_errty := fun _ => (@sem_prod_ok_error _ tin semi ErrType); *)
+  (*     id_semi_safe := fun _ => (@values.sem_prod_ok_safe _ tin semi); *)
+  (*   |}. *)
+
+
 (* RISC-V DFENCE *)
 
 (* Pseudo instruction : Other data processing instructions *)
@@ -629,6 +702,7 @@ Definition riscv_instr_desc (mn : riscv_op) : instr_desc_t :=
   | DIVU => riscv_DIVU_instr
   | REM => riscv_REM_instr
   | REMU => riscv_REMU_instr
+  | FENCE => riscv_FENCE_instr
   | DFENCE => riscv_DFENCE_instr
   end.
 

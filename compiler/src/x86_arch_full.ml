@@ -207,6 +207,7 @@ module X86_core = struct
     | Ox86MULX _ws      -> true
     | Ox86MULX_hi _     -> true
     | Ox86SLHinit       -> true
+    | Ox86SLHfence       -> true
     | Ox86SLHupdate     -> true
     | Ox86SLHmove       -> true
     | Ox86SLHprotect _  -> true

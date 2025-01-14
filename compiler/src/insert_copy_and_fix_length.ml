@@ -77,6 +77,11 @@ and iac_instr_r pd loc ir =
       let xn = size_of (L.unloc x).v_ty in
       let op = Slh_ops.SLHprotect_ptr (Conv.pos_of_int xn) in
       Copn(xs,t, Sopn.Oslh op, es)
+    | Sopn.Oslh (SLHdfence_ptr _), [Lvar x] ->
+      (* Fix the size it is dummy for the moment *)
+      let xn = size_of (L.unloc x).v_ty in
+      let op = Slh_ops.SLHdfence_ptr (Conv.pos_of_int xn) in
+      Copn(xs,t, Sopn.Oslh op, es)
     | (Sopn.Opseudo_op(Pseudo_operator.Ocopy _) | Sopn.Oslh (SLHprotect_ptr _)), _ -> assert false
     | _ -> ir
     end

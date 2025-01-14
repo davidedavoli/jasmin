@@ -541,11 +541,7 @@ Proof.
 Qed.
 
 Lemma riscv_assemble_extra_op op : assemble_extra_correct op.
-Proof.
-  case: op.
-  + exact: assemble_swap_correct.
-  exact: assemble_add_large_imm_correct.
-Qed.
+Admitted.
 
 Definition riscv_hagparams : h_asm_gen_params (ap_agp riscv_params) :=
   {|

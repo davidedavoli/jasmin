@@ -926,15 +926,15 @@ Definition alloc_dfence_ptr rmap ii r t e :=
     Let len :=
       match suby with
       | None => ok (size_slot vy)
-      | Some _ => Error (stk_error_no_var "argument of protect_ptr cannot be a sub array" )
+      | Some _ => Error (stk_error_no_var "argument of dfence_ptr cannot be a sub array" )
       end in
     match vk with
-    | None => Error (stk_error_no_var "argument of protect_ptr should be a reg ptr")
+    | None => Error (stk_error_no_var "argument of dfence_ptr should be a reg ptr")
     | Some vpk =>
       Let _ := assert (if vpk is VKptr (Pregptr _) then true else false)
-                      (stk_error_no_var "argument of protect_ptr should be a reg ptr") in
+                      (stk_error_no_var "argument of dfence_ptr should be a reg ptr") in
       Let _ := assert (if r is Lvar _ then true else false)
-                      (stk_error_no_var "destination of protect_ptr should be a reg ptr") in
+                      (stk_error_no_var "destination of dfence_ptr should be a reg ptr") in
       Let: (_, sry, bytesy) := check_vpk rmap vy vpk (Some ofs) len in
       Let: (e, _ofs) := mk_addr_pexpr rmap vy vpk in (* ofs is ensured to be 0 *)
       ok (sry, bytesy, vpk, e)
@@ -944,7 +944,7 @@ Definition alloc_dfence_ptr rmap ii r t e :=
   match subx with
   | None =>
     match get_local (v_var x) with
-    | None    => Error (stk_error_no_var "only reg ptr can receive the result of protect_ptr")
+    | None    => Error (stk_error_no_var "only reg ptr can receive the result of dfence_ptr")
     | Some pk =>
       match pk with
       | Pregptr px =>
@@ -952,7 +952,7 @@ Definition alloc_dfence_ptr rmap ii r t e :=
         Let ir := lower_dfence_ptr ii [::dx] t [:: ey] in
         let rmap := Region.set_move rmap x sry bytesy in
         ok (rmap, ir)
-      | _ => Error (stk_error_no_var "only reg ptr can receive the result of protect_ptr")
+      | _ => Error (stk_error_no_var "only reg ptr can receive the result of dfence_ptr")
       end
     end
   | Some _ => Error (stk_error_no_var "cannot assign protect_ptr in a sub array" )
