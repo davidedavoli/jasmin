@@ -655,7 +655,7 @@ Definition riscv_DFENCE_instr : instr_desc_t :=
       id_check_dest := refl_equal;
       id_str_jas := pp_s "dfence";
       id_safe := [::];
-      id_pp_asm := pp_name "df";
+      id_pp_asm := pp_name "dfence";
       id_safe_wf := refl_equal;
       id_semi_errty := fun _ => (@sem_prod_ok_error _ tin semi ErrType);
       id_semi_safe := fun _ => (@values.sem_prod_ok_safe _ tin semi);

@@ -383,7 +383,7 @@ Definition assemble_extra
       | [:: LLvar aux; LLvar x], [:: Rexpr b; Rexpr (Fvar msf)] =>
           Let _ := assert (~~(Sv.mem aux (free_vars b) || Sv.mem aux (free_vars_r (Rexpr (Fvar msf)))) &&
                              (vtype aux == sword U32))
-                     (E.error ii "Wrong parameters for #update_msf in risc-v" ) in
+                     (E.error ii "Could not assign variable in #update_msf" ) in
           match (SLH_assemble_cond ii b) with
           | ok _ c =>  match condt_to_instr c aux ii with
                        | (ok _  s) => ok (cat s [::((None, MUL), [:: LLvar x], [:: Rexpr (Fvar aux); Rexpr (Fvar msf)])])
@@ -392,7 +392,7 @@ Definition assemble_extra
           | Error e => Error e
           end
             
-      | _, _ => Error (E.error ii "Wrong parameters for update in risc-v")
+      | _, _ => Error (E.error ii "Wrong parameters for #update_msf in risc-v")
       end
 
   end.
