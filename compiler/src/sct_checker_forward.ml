@@ -613,11 +613,12 @@ end = struct
         in
         Mv.add x ty vtype) venv.vars venv.vtype }
 
+  exception Unsat of var
   let ensure_le loc venv1 venv2 =
-    let add_le_silent _ oty1 oty2 = add_le_var (oget oty1) (oget oty2); None in
+    let add_le_silent x oty1 oty2 = try add_le_var (oget oty1) (oget oty2); None with Lvl.Unsat _unsat -> raise (Unsat x)  in
     try ignore (Mv.merge add_le_silent venv1.vtype venv2.vtype)
-    with Lvl.Unsat _unsat ->
-      error ~loc "constraints caused by the loop cannot be satisfied"
+    with Unsat x ->
+      error ~loc "constraints caused by the loop cannot be satisfied %a" pp_var x
 
   let clone_for_call (env:env) (tyfun:ty_fun) =
     let subst1 = C.clone tyfun.constraints env.constraints in
