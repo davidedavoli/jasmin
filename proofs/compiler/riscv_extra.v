@@ -256,6 +256,16 @@ Fixpoint SLH_assemble_cond ii (e : fexpr) : cexec SLH_condt :=
 
 Definition frconst i := fconst riscv_reg_size i.  
 
+Definition SLH_instr_combine (a: cexec  (seq (asm_op_msb_t * lexprs * rexprs))) (b: cexec  (seq (asm_op_msb_t * lexprs * rexprs))) :=
+  match a, b with
+  | (ok _  s), (ok _  t) => ok (cat s t)
+  | Error a, _ 
+  | _, Error a => Error a
+  end.
+
+Definition SLH_instr_not (out: var_i) : cexec (seq (asm_op_msb_t * lexprs * rexprs))  := (ok [:: ((None, SLTIU), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (frconst 1)])]).
+
+
 Definition SLH_eq_to_instr  (arg1: option fexpr) (arg2: option fexpr) out ii : cexec  (seq (asm_op_msb_t * lexprs * rexprs)):= 
   match arg1 , arg2 with
   | Some (Fvar x), Some (Fvar y) => ok [::
@@ -268,33 +278,43 @@ Definition SLH_eq_to_instr  (arg1: option fexpr) (arg2: option fexpr) out ii : c
       Error (E.error ii "Can't assemble condition.")
   end.
 
+(* Definition SLH_lt_to_instr (sg: signedness) (arg1: option fexpr) (arg2: option fexpr) out ii : cexec  (seq (asm_op_msb_t * lexprs * rexprs)):= *)
+(*   let op := match sg with | Signed => SLT | Unsigned => SLTU end in *)
+(*   let opi := match sg with | Signed => SLT | Unsigned => SLTIU end in *)
+(*   match arg1 , arg2 with   *)
+(*   | Some (Fvar x), Some (Fvar y) => ok [::((None, op), [:: LLvar out], [:: Rexpr (Fvar x); Rexpr (Fvar y)])] *)
+(*   | None, Some (Fvar x) => ok [:: *)
+(*                                  ((None, LI), [:: LLvar out], [:: Rexpr (frconst 0)]); *)
+(*                                  ((None, opi), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (Fvar x)])] *)
+(*   | Some (Fvar x), None => ok [:: *)
+(*                                  ((None, LI), [:: LLvar out], [:: Rexpr (frconst 0)]); *)
+(*                                  ((None, opi), [:: LLvar out], [:: Rexpr (Fvar x); Rexpr (Fvar out)])] *)
+(*   | None, None => ok [:: *)
+(*                         ((None, LI), [:: LLvar out], [:: Rexpr (frconst (0))]) *)
+(*                     ] *)
+(*   | _ , _=> *)
+(*       Error (E.error ii "Can't assemble condition.") *)
+(*   end. *)
+
 Definition SLH_lt_to_instr (sg: signedness) (arg1: option fexpr) (arg2: option fexpr) out ii : cexec  (seq (asm_op_msb_t * lexprs * rexprs)):=
   let op := match sg with | Signed => SLT | Unsigned => SLTU end in
-  let opi := match sg with | Signed => SLT | Unsigned => SLTIU end in
+  let opi := match sg with | Signed => SLTI | Unsigned => SLTIU end in
   match arg1 , arg2 with  
   | Some (Fvar x), Some (Fvar y) => ok [::((None, op), [:: LLvar out], [:: Rexpr (Fvar x); Rexpr (Fvar y)])]
-  | None, Some (Fvar x) => ok [::
-                                 ((None, LI), [:: LLvar out], [:: Rexpr (frconst 0)]);
-                                 ((None, opi), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (Fvar x)])]
-  | Some (Fvar x), None => ok [::
-                                 ((None, LI), [:: LLvar out], [:: Rexpr (frconst 0)]);
-                                 ((None, opi), [:: LLvar out], [:: Rexpr (Fvar x); Rexpr (Fvar out)])]
+  | None, Some (Fvar x) =>  (*0<x*)
+      match sg with
+      | Signed => ok [:: ((None, NEG), [:: LLvar out], [:: Rexpr (Fvar x)]);
+                      ((None, SRLI), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (frconst 31)])]
+      | Unsigned => (SLH_instr_combine (SLH_eq_to_instr None (Some (Fvar x)) out ii) (SLH_instr_not out))
+      end
+  | Some (Fvar x), None => ok [:: ((None, opi), [:: LLvar out], [:: Rexpr (Fvar x);  Rexpr (frconst (0)) ])]
   | None, None => ok [::
                         ((None, LI), [:: LLvar out], [:: Rexpr (frconst (0))])
                     ]
-  | _ , _=>
+  |  _, _ =>
       Error (E.error ii "Can't assemble condition.")
   end.
-
     
-Definition SLH_instr_combine (a: cexec  (seq (asm_op_msb_t * lexprs * rexprs))) (b: cexec  (seq (asm_op_msb_t * lexprs * rexprs))) :=
-  match a, b with
-  | (ok _  s), (ok _  t) => ok (cat s t)
-  | Error a, _ 
-  | _, Error a => Error a
-  end.
-
-Definition SLH_instr_not (out: var_i) : cexec (seq (asm_op_msb_t * lexprs * rexprs))  := (ok [:: ((None, SLTIU), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (frconst 1)])]).
 
 Definition condt_to_instr (c: SLH_condt) out ii : cexec (seq (asm_op_msb_t * lexprs * rexprs)) := 
   match c with
@@ -383,8 +403,8 @@ Definition assemble_extra
   | Oriscv_SLHupdate =>
       match outx, inx with
       | [:: LLvar aux; LLvar x], [:: Rexpr b; Rexpr (Fvar msf)] =>
-          (* Let _ := assert (~~(Sv.mem aux (free_vars b) || Sv.mem aux (free_vars_r (Rexpr (Fvar msf)))) && *)
-          (*                    (vtype aux == sword U32)) *)
+          (* Let _ := assert False(* (~~(Sv.mem aux (free_vars b) || Sv.mem aux (free_vars_r (Rexpr (Fvar msf)))) && *) *)
+          (*                 (*    (vtype aux == sword U32)) *) *)
           (*            (E.error ii "Could not assign variable in #update_msf" ) in *)
           match (SLH_assemble_cond ii b) with
           | ok _ c =>  match condt_to_instr c aux ii with
