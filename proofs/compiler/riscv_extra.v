@@ -403,12 +403,16 @@ Definition assemble_extra
   | Oriscv_SLHupdate =>
       match outx, inx with
       | [:: LLvar aux; LLvar x], [:: Rexpr b; Rexpr (Fvar msf)] =>
-          (* Let _ := assert False(* (~~(Sv.mem aux (free_vars b) || Sv.mem aux (free_vars_r (Rexpr (Fvar msf)))) && *) *)
-          (*                 (*    (vtype aux == sword U32)) *) *)
-          (*            (E.error ii "Could not assign variable in #update_msf" ) in *)
+          Let _ := assert (~~(Sv.mem aux (free_vars_r (Rexpr (Fvar msf)))) &&
+                               (vtype aux == sword U32)) 
+                      (E.error ii "Could not assign variable in #update_msf" ) in 
+          (* test  \in {0f, 1t} *)
+          (* test  = - test     test \in {0f, -1t} *)
+          (* msf = msf and  test     msf \in {0f, msft} *)
           match (SLH_assemble_cond ii b) with
           | ok _ c =>  match condt_to_instr c aux ii with
-                       | (ok _  s) => ok (cat s [::((None, MUL), [:: LLvar x], [:: Rexpr (Fvar aux); Rexpr (Fvar msf)])])
+                       | (ok _  s) => ok (cat s [::((None, NEG), [:: LLvar aux], [:: Rexpr (Fvar aux)]);
+                                                   ((None, AND), [:: LLvar x], [:: Rexpr (Fvar aux); Rexpr (Fvar msf)])])
                        | Error e => Error e
                        end
           | Error e => Error e
