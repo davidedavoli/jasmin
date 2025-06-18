@@ -1099,11 +1099,20 @@ let rec ty_instr is_ct_asm fenv env ((msf,venv) as msf_e :msf_e) i =
         if o = Pseudo_operator.Spill then msf, Env.set_spill env venv xs
         else msf, Env.set_unspill env venv xs
 
+    | Dfence, [x], [y] ->
+       let _ = reg_lval ~direct:false loc x and _ = reg_expr ~direct:false loc y in
+       let yty =
+         match ty_expr env venv loc y with
+         | Direct (n, _) -> Direct (n, n)
+         | Indirect ((n, _), le) -> Indirect ((n, n), le) in
+       
+       ty_lval env msf_e x yty
     | (Dfence | Other), _, _  ->
       let public = not (CT.is_ct_sopn is_ct_asm o) in
       let ety = ty_exprs_max ~public env venv loc es in
       ty_lvals1 env msf_e xs (declassify_ty env i.i_annot ety)
     end
+
 
   | Cif(e, c1, c2) ->
     if is_inline i then

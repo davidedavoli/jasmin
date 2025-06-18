@@ -304,7 +304,9 @@ Definition SLH_lt_to_instr (sg: signedness) (arg1: option fexpr) (arg2: option f
   | None, Some (Fvar x) =>  (*0<x*)
       match sg with
       | Signed => ok [:: ((None, NEG), [:: LLvar out], [:: Rexpr (Fvar x)]);
-                      ((None, SRLI), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (frconst 31)])]
+                      (* ((None, SRLI), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (frconst 31)]) *)
+                      ((None, SLTI), [:: LLvar out], [:: Rexpr (Fvar out); Rexpr (frconst 0)])
+                    ]
       | Unsigned => (SLH_instr_combine (SLH_eq_to_instr None (Some (Fvar x)) out ii) (SLH_instr_not out))
       end
   | Some (Fvar x), None => ok [:: ((None, opi), [:: LLvar out], [:: Rexpr (Fvar x);  Rexpr (frconst (0)) ])]
