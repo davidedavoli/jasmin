@@ -26,11 +26,6 @@ let extract_to_file prog arch pd asmOp model amodel fnames array_dir outfile =
     raise e
   end
 
-
-
-
-
-
 let parse_and_extract arch call_conv =
   let module A = (val get_arch_module arch call_conv) in
 
