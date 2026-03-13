@@ -72,6 +72,7 @@ module X86_core = struct
     | CMP _ -> true
     | CQO _ -> false (* Not DOIT *)
     | DEC _ -> true
+    | DFENCE _ -> true
     | DIV _ -> false (* Not DOIT *)
     | IDIV _ -> false (* Not DOIT *)
     | IMUL _ -> true
@@ -207,7 +208,8 @@ module X86_core = struct
     | Ox86MULX _ws      -> true
     | Ox86MULX_hi _     -> true
     | Ox86SLHinit       -> true
-    | Ox86SLHfence       -> true
+    | Ox86SLHfence      -> true
+    | Ox86SLHdfence _   -> true
     | Ox86SLHupdate     -> true
     | Ox86SLHmove       -> true
     | Ox86SLHprotect _  -> true

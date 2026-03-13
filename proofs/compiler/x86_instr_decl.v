@@ -168,6 +168,7 @@ Variant x86_op : Type :=
 | LFENCE
 | MFENCE
 | SFENCE
+| DFENCE of wsize
 
 (* Monitoring *)
 | RDTSC   of wsize
@@ -1926,6 +1927,13 @@ Definition Ox86_MFENCE_instr :=
 Definition Ox86_SFENCE_instr :=
   mk_instr_pp "SFENCE" [::] [::] [::] [::] MSB_CLEAR tt [:: [::] ] 0 (primM SFENCE) (pp_name "sfence" U8).
 
+Definition x86_DFENCE sz (x: word sz) : word sz := x.
+
+Definition Ox86_DFENCE_instr               :=
+  mk_instr_w_w "DFENCE" x86_DFENCE [:: Eu 0] [:: Eu 1] 2 (λ sz,[::[:: r; r]]) (prim_8_64 DFENCE) size_8_64 (pp_name "dfence").
+
+
+
 (* AES instructions *)
 Definition x86_AESDEC          (v1 v2 : u128)           : tpl (w_ty U128) := wAESDEC          v1 v2.
 Definition x86_AESDECLAST      (v1 v2 : u128)           : tpl (w_ty U128) := wAESDECLAST      v1 v2.
@@ -2169,6 +2177,7 @@ Definition x86_instr_desc o : instr_desc_t :=
   | LFENCE             => Ox86_LFENCE_instr.1
   | MFENCE             => Ox86_MFENCE_instr.1
   | SFENCE             => Ox86_SFENCE_instr.1
+  | DFENCE sz          => Ox86_DFENCE_instr.1 sz
   | RDTSC sz           => Ox86_RDTSC_instr.1 sz
   | RDTSCP sz          => Ox86_RDTSCP_instr.1 sz
   | AESDEC             => Ox86_AESDEC_instr.1

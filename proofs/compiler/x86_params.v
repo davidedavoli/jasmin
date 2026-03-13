@@ -170,7 +170,8 @@ Definition x86_sh_lower
     Some (extra ++ lvs, O (Ox86SLHprotect rk ws), es)
 
   | SLHfence => Some (lvs, O (Ox86SLHfence), es)
-  | SLHprotect_ptr _ | SLHprotect_ptr_fail _  | SLHdfence _ | SLHdfence_ptr _ => None (* Taken into account by stack alloc *)
+  | SLHdfence ws =>  Some (lvs, O (Ox86SLHdfence ws), es)
+  | SLHprotect_ptr _ | SLHprotect_ptr_fail _  | SLHdfence_ptr _ => None (* Taken into account by stack alloc *)
   end.
 
 Definition x86_shparams : sh_params :=

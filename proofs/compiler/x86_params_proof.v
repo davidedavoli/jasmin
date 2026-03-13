@@ -684,7 +684,9 @@ Proof.
     t_xrbindP => z [op oargs] hass <- <- hlo /=.
     by rewrite -(wrepr0 U64) in hw; apply (assemble_mov hlo hw hass).
 
-  admit.
+    admit.
+
+    + admit.
     
   (* SLHupdate *)
   + rewrite /exec_sopn /= /sopn_sem /sopn_sem_ /= /x86_se_update_sem /=; t_xrbindP.

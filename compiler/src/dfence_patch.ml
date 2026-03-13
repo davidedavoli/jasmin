@@ -24,10 +24,18 @@ module FEnv = struct
 
 end
 
+module IntOrd : Set.OrderedType with type t = int = struct
+  type t = int
+  let compare = Stdlib.compare
+end
+
+module UidSet = Set.Make(IntOrd)
+
 (* --------------------------------------------------------- *)
 
 exception Insert_dfence of L.i_loc * expr 
 exception Insert_dfence_ptr of L.i_loc * var_i 
+exception Loop_fixpoint_failure of L.i_loc * int * var 
 
 (* --------------------------------------------------------- *)
 (* Type checking of expressions                              *)
@@ -40,7 +48,21 @@ let rec ty_expr env venv loc (e:expr) : vty =
   match e with
   | Pconst _ | Pbool _ | Parr_init _ -> Env.dpublic env
 
-  | Pvar x -> Env.gget venv x
+  | Pvar x ->   let xty = Env.gget venv x in
+                (match (L.unloc x.gv).v_kind, xty with
+                | Reg _, _  | Global, Direct _ | Inline, Direct _ -> Env.gget venv x
+                | Stack (Direct), Direct _ -> let ty = Env.fresh2 env in
+                                              VlPairs.add_le_speculative (Env.secret env) ty;
+                                              VlPairs.add_le (content_ty xty) ty;
+                                              Direct ty
+                | Stack (Pointer _ ), Indirect (lp, le) -> let ty = Env.fresh2 env in
+                                                           VlPairs.add_le_speculative (Env.secret env) ty;
+                                                           VlPairs.add_le lp ty;
+                                                           Indirect (ty, le)
+                | _ ->
+                   error ~loc:loc.L.base_loc
+                     "invalid security annotations for %a" pp_var (L.unloc x.gv))
+
 
   | Pget (_, aa, ws, x, i) ->
       ensure_public_address env venv loc x.gv;
@@ -330,7 +352,12 @@ let rec ty_instr is_ct_asm fenv env ((msf,venv) as msf_e :msf_e) i =
     ensure_public env venv2 loc e;
     let (msf', venv') = ty_cmd is_ct_asm fenv env (MSF.enter_if msf2 e, venv2) c2 in
     let _ = MSF.end_loop loc.L.base_loc msf1 msf' in
-    Env.ensure_le loc.L.base_loc venv' venv1; (* venv' <= venv1 *)
+    begin
+      try
+        Env.ensure_le ~err:false loc.L.base_loc venv' venv1; (* venv' <= venv1 *)
+      with Unsat x ->
+        raise (Loop_fixpoint_failure (loc, loc.L.uid_loc, x))
+    end;
     MSF.enter_if msf2 (Papp1(Onot, e)), venv2
 
   | Ccall (xs, f, es) ->
@@ -412,6 +439,84 @@ and patch_i loc patch i =
     (try {i with i_desc = Cwhile(a, patch_c loc patch c1, e, ii, c2) }
      with Not_found -> {i with i_desc = Cwhile(a, c1, e, ii, patch_c loc patch c2) })
 
+let make_dfence loc x =
+  let v = L.unloc x in
+  match v.v_kind with
+  | Stack _ -> 
+      (* Skip patching stack variables *)
+      None
+  | Inline -> 
+      None
+  | _ ->
+    let op =
+      match v.v_ty with
+      | Bty (U ws) -> Slh_ops.SLHdfence ws
+      | Arr (ws, len) -> SLHdfence_ptr (Conv.pos_of_int (arr_size ws len))
+      | _ ->
+          error ~loc:loc.L.base_loc
+            "%a need to be protected, don't know how to protect a variable of this type"
+            pp_var (L.unloc x)
+    in
+    Some {
+      i_desc = Copn ([Lvar x], E.AT_keep, Oslh op, [Pvar (gkvar x)]);
+      i_loc = L.refresh_i_loc loc;
+      i_info = ();
+      i_annot = []
+      }
+
+let rec patch_lhs_instr i =
+let loc = i.i_loc in
+let vars_of_glval_list (glvals) =
+  List.filter_map (function
+      | Lvar x -> Some x
+      | _ -> None
+    ) glvals
+in
+let option_to_list o =
+  match o with
+    None -> []
+  | Some x -> [x] in
+  match i.i_desc with
+| Csyscall (xs, o, es) ->
+    assert (match o with Syscall_t.RandomBytes _ -> true);
+    let xs_vars = vars_of_glval_list xs in
+    let dfences = List.filter_map (make_dfence loc) xs_vars in
+    i :: dfences
+| Cassgn (lv, _, _, e) ->
+   begin match lv with
+   | Lvar x ->
+      let dfences = option_to_list (make_dfence loc  x) in
+      i :: dfences
+   | _ ->
+      [i]
+   end
+
+  | Copn (xs, a, o, es) ->
+     let xs_vars = vars_of_glval_list xs in
+     let dfences = List.filter_map (make_dfence loc) xs_vars in
+      i :: dfences
+
+  | Cif (e, c1, c2) ->
+      let c1' = patch_lhs_command c1 in
+      let c2' = patch_lhs_command c2 in
+      [{ i with i_desc = Cif (e, c1', c2') }]
+
+  | Cfor (x, r, c) ->
+      let c' = patch_lhs_command c in
+      [{ i with i_desc = Cfor (x, r, c') }]
+
+  | Cwhile (a, c1, e, ii, c2) ->
+      let c1' = patch_lhs_command c1 in
+      let c2' = patch_lhs_command c2 in
+      [{ i with i_desc = Cwhile (a, c1', e, ii, c2') }]
+
+  | Ccall (xs, f, es) ->
+    let xs_vars = vars_of_glval_list xs in
+    let dfences = List.filter_map (make_dfence loc) xs_vars in
+    i :: dfences
+
+and patch_lhs_command c =
+  List.concat_map patch_lhs_instr c
   
   
 
@@ -421,9 +526,15 @@ and patch_i loc patch i =
 let rec ty_fun is_ct_asm fenv fn =
   try Hf.find fenv.fenv.env_ty fn
   with Not_found ->
+    (Format.eprintf "now typing %s@." fn.fn_name);
     let (fd, fty) = ty_fun_infer is_ct_asm fenv fn in
     Hf.add fenv.fenv.env_ty fn fty;
     Hf.add fenv.patchs fn fd;
+    (Format.eprintf
+       "typed: @.%a@."
+       pp_funty
+       (fd.f_name.fn_name, fty);
+    );
     fty
 
 and ty_fun_infer is_ct_asm fenv fn =
@@ -432,7 +543,7 @@ and ty_fun_infer is_ct_asm fenv fn =
   let _, called = written_vars_fc f in
   Mf.iter (fun fn _ -> ignore (ty_fun is_ct_asm fenv fn)) called;
   
-  let rec aux body = 
+  let rec aux patched_loops body = 
     try 
       let env, venv, tyin, tyout, modmsf = init_constraint fenv f in
       (* init msf status *)
@@ -491,14 +602,20 @@ and ty_fun_infer is_ct_asm fenv fn =
       C.optimize constraints ~tomin ~tomax;
       body, fty
     with 
-    | Insert_dfence (loc, e) -> 
+    | Insert_dfence (loc, e) ->
       let xs = Sv.elements (vars_e e) in
       let xs = List.map (L.mk_loc loc.L.base_loc) xs in
-      aux_patch loc xs body
-    | Insert_dfence_ptr(loc, x) -> aux_patch loc [x] body
-        
+       (Format.eprintf "Dfence at location %a %a@." L.pp_iloc loc pp_expr e);
+      aux_patch patched_loops loc xs body
+    | Insert_dfence_ptr(loc, x) ->
+       (Format.eprintf "Dfence at location %a@." L.pp_iloc loc);
+       aux_patch patched_loops loc [x] body
+    | Loop_fixpoint_failure (loc, uid, x) ->
+       (Format.eprintf "Fixpoint %a %a@." L.pp_iloc loc pp_var x);
+       aux_patch patched_loops loc [L.mk_loc loc.L.base_loc x] body 
 
-    and aux_patch loc xs body = 
+
+    and aux_patch patched_loops loc xs body = 
       let doit x = 
         let op = 
           match (L.unloc x).v_ty with
@@ -514,8 +631,10 @@ and ty_fun_infer is_ct_asm fenv fn =
         ; i_info = ()
         ; i_annot = [] } in 
       let patch = List.map doit xs in
-      aux (patch_c loc patch body) in
-    let f_body, fty = aux f.f_body in
+      let body' = patch_c loc patch body in
+       (* (Format.eprintf "body' = %a@." pp_stmt body'); *)
+      aux patched_loops body' in
+    let f_body, fty = aux UidSet.empty f.f_body in
     { f with f_body}, fty
       
 

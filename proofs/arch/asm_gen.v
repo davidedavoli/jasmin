@@ -566,7 +566,7 @@ Definition assemble_i (rip : var) (i : linstr) : cexec (seq asm_i) :=
       else Error (E.verror true "Not a register" ii r) in
       ok [:: mk (JAL r l) ]
 
-  | Lret =>
+  | Lret => 
       ok [:: mk POPPC ]
 
   end.

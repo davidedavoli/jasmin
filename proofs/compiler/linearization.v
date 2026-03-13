@@ -730,55 +730,116 @@ Fixpoint linear_i (i:instr) (lbl:label) (lc:lcmd) :=
   | Cfor _ _ _ => (lbl, lc)
   end.
 
+(* Definition linear_body (e: stk_fun_extra) (body: cmd) : label * lcmd := *)
+(*   let: (tail, head, lbl) := *)
+(*      match sf_return_address e with *)
+(*      | RAreg r _ => *)
+(*        ( [:: MkLI dummy_instr_info (Ligoto (Rexpr (Fvar (mk_var_i r)))) ] *)
+(*        , [:: MkLI dummy_instr_info (Llabel 1) ] *)
+(*        , 2%positive *)
+(*        ) *)
+(*      | RAstack ra_call ra_return z _ => *)
+(*        ( if ra_return is Some ra_return *)
+(*          then [:: lload (mk_var_i ra_return) rspi z; *)
+(*                   MkLI dummy_instr_info (Ligoto (Rexpr (Fvar (mk_var_i ra_return)))) ] *)
+(*          else [:: MkLI dummy_instr_info Lret ] *)
+(*        , MkLI dummy_instr_info (Llabel 1) :: *)
+(*          (if ra_call is Some ra_call *)
+(*           then [:: lstore rspi z (mk_var_i ra_call) ] *)
+(*           else [::]) *)
+(*        , 2%positive *)
+(*        ) *)
+(* Helper: SLH dfence tied to a return-address register *)
+
+(* Definition slh_dfence_ra *)
+(*   (ii : instr_info) *)
+(*   (r  : var) *)
+(*   (tg : assgn_tag) : linstr := *)
+(*   MkLI ii *)
+(*     (Lopn *)
+(*       [:: (LLvar (mk_var_i r))] *)
+(*       (Oslh (SLHdfence Uptr)) *)
+(*       [:: Rexpr (Fvar((mk_var_i r)))]). *)
+
+(* Definition linear_body (e : stk_fun_extra) (body : cmd) : label * lcmd := *)
+(*   let: (tail, head, lbl) := *)
+(*      match sf_return_address e with *)
+(*      | RAreg r _ => *)
+(*        ( [:: slh_dfence_ra dummy_instr_info r AT_none; *)
+(*             MkLI dummy_instr_info *)
+(*               (Ligoto (Rexpr (Fvar (mk_var_i r)))) ] *)
+(*        , [:: MkLI dummy_instr_info (Llabel 1) ] *)
+(*        , 2%positive *)
+(*        ) *)
+
+(*      | RAstack ra_call (Some ra_return) z _ => *)
+(*        ( [:: lload (mk_var_i ra_return) rspi z; *)
+(*             slh_dfence_ra dummy_instr_info ra_return AT_none; *)
+(*             MkLI dummy_instr_info *)
+(*               (Ligoto (Rexpr (Fvar (mk_var_i ra_return)))) ] *)
+(*        , MkLI dummy_instr_info (Llabel 1) :: *)
+(*          (if ra_call is Some ra_call *)
+(*           then [:: lstore rspi z (mk_var_i ra_call) ] *)
+(*           else [::]) *)
+(*        , 2%positive *)
+(*        ) *)
+
+(*      | RAstack _ None _ _ => *)
+(*        ( [:: MkLI dummy_instr_info Lret ] *)
+(*        , [:: MkLI dummy_instr_info (Llabel 1) ] *)
+(*        , 2%positive *)
+(*        ) *)
+
+
 Definition linear_body (e: stk_fun_extra) (body: cmd) : label * lcmd :=
   let: (tail, head, lbl) :=
-     match sf_return_address e with
-     | RAreg r _ =>
-       ( [:: MkLI dummy_instr_info (Ligoto (Rexpr (Fvar (mk_var_i r)))) ]
-       , [:: MkLI dummy_instr_info (Llabel 1) ]
-       , 2%positive
-       )
-     | RAstack ra_call ra_return z _ =>
-       ( if ra_return is Some ra_return
-         then [:: lload (mk_var_i ra_return) rspi z;
-                  MkLI dummy_instr_info (Ligoto (Rexpr (Fvar (mk_var_i ra_return)))) ]
-         else [:: MkLI dummy_instr_info Lret ]
-       , MkLI dummy_instr_info (Llabel 1) ::
-         (if ra_call is Some ra_call
-          then [:: lstore rspi z (mk_var_i ra_call) ]
-          else [::])
-       , 2%positive
-       )
-     | RAnone =>
-       let sf_sz := (sf_stk_sz e + sf_stk_extra_sz e)%Z in
-       match sf_save_stack e with
-       | SavedStackNone =>
-         ([::], [::], 1%positive)
-       | SavedStackReg x =>
-         (* Tail: R[rsp] := R[x]
-          * Head: R[x] := R[rsp]
-          *       Setup stack.
-          *)
-         let r := mk_var_i x in
-         ( [:: lmove rspi r ]
-         , set_up_sp_register rspi sf_sz (sf_align e) r (mk_var_i var_tmp)
-         , 1%positive
-         )
-       | SavedStackStk ofs =>
-         (* Tail: Load saved registers.
-          *       R[rsp] := M[R[rsp] + ofs]
-          * Head: R[r] := R[rsp]
-          *       Setup stack.
-          *       M[R[rsp] + ofs] := R[r]
-          *       Push registers to save to the stack.
-          *)
-         let r := mk_var_i var_tmp in
-         ( pop_to_save e.(sf_to_save) ofs
-         , set_up_sp_register rspi sf_sz (sf_align e) r (mk_var_i var_tmp2)
-             ++ push_to_save e.(sf_to_save) (var_tmp, ofs)
-         , 1%positive)
-       end
-     end
+    match sf_return_address e with
+    | RAreg r _ =>
+        ( [:: MkLI dummy_instr_info (Ligoto (Rexpr (Fvar (mk_var_i r)))) ]
+          , [:: MkLI dummy_instr_info (Llabel 1) ]
+          , 2%positive
+        )
+    | RAstack ra_call ra_return z _ =>
+        ( if ra_return is Some ra_return
+          then [:: lload (mk_var_i ra_return) rspi z;
+                MkLI dummy_instr_info (Ligoto (Rexpr (Fvar (mk_var_i ra_return)))) ]
+          else [:: MkLI dummy_instr_info Lret ]
+          , MkLI dummy_instr_info (Llabel 1) ::
+              (if ra_call is Some ra_call
+               then [:: lstore rspi z (mk_var_i ra_call) ]
+               else [::])
+          , 2%positive
+        )
+    | RAnone =>
+        let sf_sz := (sf_stk_sz e + sf_stk_extra_sz e)%Z in
+        match sf_save_stack e with
+        | SavedStackNone =>
+            ([::], [::], 1%positive)
+        | SavedStackReg x =>
+            (* Tail: R[rsp] := R[x]
+             * Head: R[x] := R[rsp]
+             *       Setup stack.
+             *)
+            let r := mk_var_i x in
+            ( [:: lmove rspi r ]
+              , set_up_sp_register rspi sf_sz (sf_align e) r (mk_var_i var_tmp)
+              , 1%positive
+            )
+        | SavedStackStk ofs =>
+            (* Tail: Load saved registers.
+             *       R[rsp] := M[R[rsp] + ofs]
+             * Head: R[r] := R[rsp]
+             *       Setup stack.
+             *       M[R[rsp] + ofs] := R[r]
+             *       Push registers to save to the stack.
+             *)
+            let r := mk_var_i var_tmp in
+            ( pop_to_save e.(sf_to_save) ofs
+              , set_up_sp_register rspi sf_sz (sf_align e) r (mk_var_i var_tmp2)
+                  ++ push_to_save e.(sf_to_save) (var_tmp, ofs)
+              , 1%positive)
+        end
+    end
   in
   let fd' := linear_c linear_i body lbl tail in
   (fd'.1, head ++ fd'.2).

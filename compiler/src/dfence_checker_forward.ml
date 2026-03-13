@@ -381,6 +381,8 @@ and infer_msf_c ~withcheck fenv tbl c ms =
 (* --------------------------------------------------------- *)
 (* Typing environment                                        *)
 
+exception Unsat of var
+
 type var_kind = Strict | Flexible
 
 module Env : sig
@@ -420,7 +422,7 @@ module Env : sig
   val msf_oracle : env -> L.i_loc -> Sv.t
 
   val freshen : ?min:Constraints.VlPairs.t -> env -> venv -> venv
-  val ensure_le : L.t -> venv -> venv -> unit
+  val ensure_le : ?err:bool -> L.t -> venv -> venv -> unit
   val clone_for_call : env -> ty_fun -> vfty list * vfty list * VlPairs.t
           (* output type, input type, output corruption *)
 
@@ -506,7 +508,7 @@ end = struct
       let public2 = public2 env in
       match x.v_kind, xty with
       | Const, Direct le -> VlPairs.add_le le public2; xty
-      | Inline, Direct le -> VlPairs.add_le le public2; xty
+      | Inline, Direct le  -> VlPairs.add_le le public2; xty 
 
       | Global, Direct _
       | Stack Direct, Direct _
@@ -613,11 +615,11 @@ end = struct
         in
         Mv.add x ty vtype) venv.vars venv.vtype }
 
-  exception Unsat of var
-  let ensure_le loc venv1 venv2 =
+  
+  let ensure_le ?(err=true) loc venv1 venv2 =
     let add_le_silent x oty1 oty2 = try add_le_var (oget oty1) (oget oty2); None with Lvl.Unsat _unsat -> raise (Unsat x)  in
     try ignore (Mv.merge add_le_silent venv1.vtype venv2.vtype)
-    with Unsat x ->
+    with Unsat x when err ->
       error ~loc "constraints caused by the loop cannot be satisfied %a" pp_var x
 
   let clone_for_call (env:env) (tyfun:ty_fun) =
@@ -705,7 +707,20 @@ let rec ty_expr env venv loc (e:expr) : vty =
   match e with
   | Pconst _ | Pbool _ | Parr_init _ -> Env.dpublic env
 
-  | Pvar x -> Env.gget venv x
+  | Pvar x ->   let xty = Env.gget venv x in
+                (match (L.unloc x.gv).v_kind, xty with
+                | Reg _, _  | Global, Direct _ | Inline, Direct _ -> Env.gget venv x
+                | Stack (Direct), Direct _ -> let ty = Env.fresh2 env in
+                                              VlPairs.add_le_speculative (Env.secret env) ty;
+                                              VlPairs.add_le (content_ty xty) ty;
+                                              Direct ty
+                | Stack (Pointer _ ), Indirect (lp, le) -> let ty = Env.fresh2 env in
+                                                           VlPairs.add_le_speculative (Env.secret env) ty;
+                                                           VlPairs.add_le lp ty;
+                                                           Indirect (ty, le)
+                | _ ->
+                   error ~loc
+                     "invalid security annotations for %a" pp_var (L.unloc x.gv))
 
   | Pget (_, aa, ws, x, i) ->
       ensure_public_address env venv loc x.gv;

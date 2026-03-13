@@ -55,6 +55,7 @@ Variant x86_extra_op : Type :=
 
 | Ox86SLHinit
 | Ox86SLHfence
+| Ox86SLHdfence of wsize
 | Ox86SLHupdate
 | Ox86SLHmove
 | Ox86SLHprotect of reg_kind & wsize
@@ -215,6 +216,20 @@ Definition Ox86SLHprotect_instr rk :=
                   (@se_protect_large_sem ws)
                   (Uptr < ws)%CMP.
 
+Definition se_dfence
+  (ws:wsize) (w:word ws) : (word ws) :=
+  x86_DFENCE w.
+Definition Ox86SLHdfence_str := append "Ox86_" SLHdfence_str.
+Definition Ox86SLHdfence_instr ws :=
+    mk_instr_desc_safe (pp_sz SLHdfence_str ws)
+      [:: sword ws]
+      [:: E 1 ]
+      [:: sword ws ]
+      [:: E 0 ]
+      (@se_dfence ws)
+      true.
+
+
 Definition get_instr_desc o :=
   match o with
   | Oset0 ws         => Oset0_instr ws
@@ -222,8 +237,8 @@ Definition get_instr_desc o :=
   | Ox86MOVZX32      => Ox86MOVZX32_instr
   | Ox86MULX ws      => Ox86MULX_instr ws
   | Ox86MULX_hi ws   => Ox86MULX_hi_instr ws
-
-  | Ox86SLHfence       => Ox86SLHfence_instr
+  | Ox86SLHfence      => Ox86SLHfence_instr
+  | Ox86SLHdfence ws  => Ox86SLHdfence_instr ws
   | Ox86SLHinit       => Ox86SLHinit_instr
   | Ox86SLHupdate     => Ox86SLHupdate_instr
   | Ox86SLHmove       => Ox86SLHmove_instr
@@ -254,6 +269,14 @@ Definition assemble_slh_init
 Definition assemble_slh_fence : cexec (seq (asm_op_msb_t * seq lexpr * seq rexpr)) :=
   ok
     [:: [::] ::= LFENCE [::]].
+
+
+Definition assemble_slh_dfence
+  (ws : wsize)
+  (les : seq lexpr)
+  (res : seq rexpr) :
+  cexec (seq (asm_op_msb_t * seq lexpr * seq rexpr)) :=
+  ok [:: les ::= (DFENCE ws) res ].
 
 Definition assemble_slh_update
   (ii : instr_info)
@@ -351,6 +374,7 @@ Definition assemble_extra ii o outx inx : cexec (seq (asm_op_msb_t * lexprs * re
     ok [:: outx ::= (MULX_lo_hi sz) inx]
 
   | Ox86SLHfence => assemble_slh_fence
+  | Ox86SLHdfence ws => assemble_slh_dfence ws outx inx
   | Ox86SLHinit => assemble_slh_init outx
   | Ox86SLHupdate => assemble_slh_update ii outx inx
   | Ox86SLHmove => assemble_slh_move outx inx
